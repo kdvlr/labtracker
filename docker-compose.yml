@@ -1,0 +1,15 @@
+services:
+  labtracker:
+    build: ./backend
+    container_name: labtracker
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+    environment:
+      # Optional: preset keys via env instead of the Settings screen.
+      # - ANTHROPIC_API_KEY=sk-ant-...
+      # - OPENAI_API_KEY=sk-...
+      # - GEMINI_API_KEY=AIza...
+      - LABTRACKER_DATA=/data
+    restart: unless-stopped
