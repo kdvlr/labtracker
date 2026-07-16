@@ -759,27 +759,95 @@ function resultsSection(t, rows, convert, displayUnit) {
   return el("div", { class: "card" }, table);
 }
 
-function renderStructuredDesc(container, descObj) {
-  const items = [
-    { label: "Description", text: descObj.description, icon: "📋", cls: "" },
-    { label: "High", text: descObj.high, icon: "▲ High", cls: "high" },
-    { label: "Low", text: descObj.low, icon: "▼ Low", cls: "low" },
-    { label: "Age Related Details", text: descObj.age_related, icon: "🎂", cls: "info" },
-    { label: "Related Tests", text: descObj.related_tests, icon: "🧪", cls: "related" },
+function sanitizeDescText(text, label) {
+  if (!text) return "";
+  let clean = text.trim();
+  const prefixes = [
+    label.toLowerCase() + ":",
+    label.toLowerCase(),
+    "description:",
+    "high:",
+    "low:",
+    "age related details:",
+    "related tests:",
+    "age-related details:",
+    "related-tests:"
   ];
+  let stripped = true;
+  while (stripped) {
+    stripped = false;
+    for (const p of prefixes) {
+      if (clean.toLowerCase().startsWith(p)) {
+        clean = clean.slice(p.length).trim();
+        stripped = true;
+      }
+    }
+  }
+  clean = clean.replace(/^[:\-\s\u2013\u2014]+/, "").trim();
+  return clean;
+}
 
-  for (const item of items) {
-    if (!item.text || item.text === "N/A" || item.text === "none") continue;
-    
-    container.append(el("div", { class: `desc-block ${item.cls}` }, [
+function renderStructuredDesc(container, descObj) {
+  const descText = sanitizeDescText(descObj.description, "Description");
+  if (descText && descText !== "N/A" && descText !== "none") {
+    container.append(el("div", { class: "desc-block desc-hero" }, [
       el("div", { class: "desc-label" }, [
-        el("span", { class: "desc-icon" }, item.icon),
-        el("span", { class: "desc-title" }, item.label)
+        el("span", { class: "desc-icon" }, "📋"),
+        el("span", { class: "desc-title" }, "What this biomarker measures")
       ]),
-      el("p", { class: "desc-body-text" }, item.text)
+      el("p", { class: "desc-body-text" }, descText)
     ]));
   }
+
+  const grid = el("div", { class: "desc-grid" });
+
+  const lowText = sanitizeDescText(descObj.low, "Low");
+  if (lowText && lowText !== "N/A" && lowText !== "none") {
+    grid.append(el("div", { class: "desc-block low" }, [
+      el("div", { class: "desc-label" }, [
+        el("span", { class: "desc-icon" }, "▼"),
+        el("span", { class: "desc-title" }, "Low levels")
+      ]),
+      el("p", { class: "desc-body-text" }, lowText)
+    ]));
+  }
+
+  const highText = sanitizeDescText(descObj.high, "High");
+  if (highText && highText !== "N/A" && highText !== "none") {
+    grid.append(el("div", { class: "desc-block high" }, [
+      el("div", { class: "desc-label" }, [
+        el("span", { class: "desc-icon" }, "▲"),
+        el("span", { class: "desc-title" }, "High levels")
+      ]),
+      el("p", { class: "desc-body-text" }, highText)
+    ]));
+  }
+
+  const ageText = sanitizeDescText(descObj.age_related, "Age Related Details");
+  if (ageText && ageText !== "N/A" && ageText !== "none") {
+    grid.append(el("div", { class: "desc-block info" }, [
+      el("div", { class: "desc-label" }, [
+        el("span", { class: "desc-icon" }, "🎂"),
+        el("span", { class: "desc-title" }, "Age Related Details")
+      ]),
+      el("p", { class: "desc-body-text" }, ageText)
+    ]));
+  }
+
+  const relatedText = sanitizeDescText(descObj.related_tests, "Related Tests");
+  if (relatedText && relatedText !== "N/A" && relatedText !== "none") {
+    grid.append(el("div", { class: "desc-block related" }, [
+      el("div", { class: "desc-label" }, [
+        el("span", { class: "desc-icon" }, "🧪"),
+        el("span", { class: "desc-title" }, "Related Tests")
+      ]),
+      el("p", { class: "desc-body-text" }, relatedText)
+    ]));
+  }
+
+  container.append(grid);
 }
+
 
 function descriptionSection(t) {
   const { member } = state._detail;
