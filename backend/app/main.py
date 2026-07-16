@@ -221,7 +221,7 @@ def _calculate_age(dob_str: Optional[str]) -> Optional[int]:
 
 
 @app.post("/api/test-types/{tt_id}/describe")
-def describe_test_type(tt_id: int, member_id: Optional[int] = None):
+def describe_test_type(tt_id: int, member_id: Optional[int] = None, force_refresh: bool = False):
     """Return a clinical reference description. If member_id is provided,
     generates a dynamic, age-specific and history-aware guide for that member.
     Otherwise, returns the cached generic test description."""
@@ -239,6 +239,20 @@ def describe_test_type(tt_id: int, member_id: Optional[int] = None):
         related_str = ""
         
         if member_id is not None:
+            # Check cache first
+            if not force_refresh:
+                cached_row = conn.execute(
+                    "SELECT description, generated_at FROM member_descriptions WHERE member_id = ? AND test_type_id = ?",
+                    (member_id, tt_id)
+                ).fetchone()
+                if cached_row:
+                    import json
+                    return {
+                        "description": json.loads(cached_row["description"]),
+                        "cached": True,
+                        "generated_at": cached_row["generated_at"]
+                    }
+
             member = conn.execute("SELECT * FROM members WHERE id = ?", (member_id,)).fetchone()
             if member:
                 age = _calculate_age(member["dob"])
@@ -338,7 +352,24 @@ def describe_test_type(tt_id: int, member_id: Optional[int] = None):
                     "age_related": "Refer to guidelines.",
                     "related_tests": "See related tests tab."
                 }
-            return {"description": parsed, "cached": False}
+            
+            # Save cache
+            conn.execute(
+                """INSERT INTO member_descriptions (member_id, test_type_id, description, generated_at)
+                   VALUES (?, ?, ?, datetime('now'))
+                   ON CONFLICT(member_id, test_type_id) DO UPDATE SET description = excluded.description, generated_at = excluded.generated_at""",
+                (member_id, tt_id, json.dumps(parsed))
+            )
+            conn.commit()
+
+            # Retrieve generated_at
+            gen_time = conn.execute(
+                "SELECT generated_at FROM member_descriptions WHERE member_id = ? AND test_type_id = ?",
+                (member_id, tt_id)
+            ).fetchone()["generated_at"]
+
+            return {"description": parsed, "cached": False, "generated_at": gen_time}
+
         else:
             if row["description"]:
                 import json

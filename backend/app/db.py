@@ -29,8 +29,21 @@ def init_db() -> None:
     conn = get_db()
     try:
         conn.executescript(_SCHEMA)
+        # Create member_descriptions cache table if not exists
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS member_descriptions (
+                member_id INTEGER NOT NULL,
+                test_type_id INTEGER NOT NULL,
+                description TEXT NOT NULL,
+                generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (member_id, test_type_id),
+                FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE,
+                FOREIGN KEY (test_type_id) REFERENCES test_types(id) ON DELETE CASCADE
+            )"""
+        )
         # Migration: add columns that older databases predate.
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(test_types)")}
+
         if "zones" not in cols:
             conn.execute("ALTER TABLE test_types ADD COLUMN zones TEXT")
         dcols = {r["name"] for r in conn.execute("PRAGMA table_info(documents)")}
