@@ -198,28 +198,113 @@ DESCRIBE_SYSTEM = (
 )
 
 
+def _calculate_age(dob_str: Optional[str]) -> Optional[int]:
+    if not dob_str:
+        return None
+    try:
+        from datetime import date
+        born = date.fromisoformat(dob_str[:10])
+        today = date.today()
+        return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+    except Exception:
+        return None
+
+
 @app.post("/api/test-types/{tt_id}/describe")
-def describe_test_type(tt_id: int):
-    """Return a cached plain-language description, generating one via the
-    configured AI provider on first request and storing it."""
+def describe_test_type(tt_id: int, member_id: Optional[int] = None):
+    """Return a clinical reference description. If member_id is provided,
+    generates a dynamic, age-specific and history-aware guide for that member.
+    Otherwise, returns the cached generic test description."""
     conn = get_db()
     try:
         row = conn.execute("SELECT * FROM test_types WHERE id = ?", (tt_id,)).fetchone()
         if not row:
             raise HTTPException(404, "Not found")
-        if row["description"]:
-            return {"description": row["description"], "cached": True}
+
         provider, model, key = _ai_config(conn)
-        prompt = f"Biomarker: {row['name']}" + (f" (measured in {row['canonical_unit']})" if row["canonical_unit"] else "") + "."
-        try:
-            text = ai.chat(provider, model, key, DESCRIBE_SYSTEM, prompt).strip()
-        except ai.AIError as e:
-            raise HTTPException(400, str(e))
-        conn.execute("UPDATE test_types SET description = ? WHERE id = ?", (text, tt_id))
-        conn.commit()
-        return {"description": text, "cached": False}
+
+        member_context = ""
+        age_str = ""
+        latest_str = ""
+        related_str = ""
+        
+        if member_id is not None:
+            member = conn.execute("SELECT * FROM members WHERE id = ?", (member_id,)).fetchone()
+            if member:
+                age = _calculate_age(member["dob"])
+                sex = member["sex"] or "Not specified"
+                age_str = f"{age} years old" if age is not None else "Age not specified"
+                
+                # Fetch member's latest results for this biomarker
+                latest = conn.execute(
+                    """SELECT value, unit, value_canonical, flag, taken_at 
+                       FROM results 
+                       WHERE member_id = ? AND test_type_id = ? 
+                       ORDER BY taken_at DESC LIMIT 1""",
+                    (member_id, tt_id)
+                ).fetchone()
+                
+                latest_str = "No results on file yet."
+                if latest:
+                    orig_val = f"{latest['value']} {latest['unit']}"
+                    canon_val = f"{round(latest['value_canonical'], 3)} {row['canonical_unit'] or ''}"
+                    flag_str = f" (Flagged as {latest['flag']})" if latest['flag'] else ""
+                    latest_str = f"Latest reading on {latest['taken_at']}: {canon_val} {flag_str} (reported as {orig_val})."
+
+                # Fetch other test types in the same category
+                related_rows = conn.execute(
+                    """SELECT name 
+                       FROM test_types 
+                       WHERE category = ? AND id != ?""",
+                    (row["category"], tt_id)
+                ).fetchall()
+                related_names = [r["name"] for r in related_rows]
+                related_str = ", ".join(related_names[:5]) if related_names else "none"
+
+                member_context = (
+                    f"Write this clinical reference guide specifically for the patient: "
+                    f"Name: {member['name']}, Age: {age_str}, Sex: {sex}.\n"
+                    f"Patient's Latest Result: {latest_str}\n"
+                    f"Related tests in the same category ({row['category']}): {related_str}.\n"
+                )
+
+        if member_id is not None and member_context:
+            system_prompt = (
+                "You are an expert clinical reference assistant explaining lab test results. "
+                "Your goal is to write a clear, personalized, and educational reference guide for a family member. "
+                "Format your response with clear sections/headings using Markdown. Do not include any meta-announcements, "
+                "introductions, or medical-advice disclaimers (these are handled by the main UI)."
+            )
+            prompt = (
+                f"{member_context}\n"
+                f"Biomarker: {row['name']}" + (f" (measured in {row['canonical_unit']})" if row['canonical_unit'] else "") + ".\n"
+                f"Reference range limits: low {row['ref_low'] or 'n/a'}, high {row['ref_high'] or 'n/a'}.\n\n"
+                f"Please write a guide that addresses the following:\n"
+                f"1. **What this test measures & why it matters**: Explain the biomarker clearly, what the reference ranges mean, and the clinical implications of high vs. low levels.\n"
+                f"2. **Observations based on age**: Note any relevant observations or normal shifts for a {age_str} patient.\n"
+                f"3. **Interpretation of latest results**: Reference the patient's latest reading ({latest_str}) and translate it into plain language (is it normal, high, or low, and what should they keep in mind).\n"
+                f"4. **Related tests**: Explain how this biomarker relates to other tests in the same panel ({related_str}), and how to interpret their results together (e.g. if this is liver enzymes, how they track together)."
+            )
+            try:
+                text = ai.chat(provider, model, key, system_prompt, prompt).strip()
+            except ai.AIError as e:
+                raise HTTPException(400, str(e))
+            return {"description": text, "cached": False}
+        else:
+            if row["description"]:
+                return {"description": row["description"], "cached": True}
+            system_prompt = DESCRIBE_SYSTEM
+            prompt = f"Biomarker: {row['name']}" + (f" (measured in {row['canonical_unit']})" if row["canonical_unit"] else "") + "."
+            try:
+                text = ai.chat(provider, model, key, system_prompt, prompt).strip()
+            except ai.AIError as e:
+                raise HTTPException(400, str(e))
+            conn.execute("UPDATE test_types SET description = ? WHERE id = ?", (text, tt_id))
+            conn.commit()
+            return {"description": text, "cached": False}
     finally:
         conn.close()
+
 
 
 # ---------------- documents / upload / extract ----------------
