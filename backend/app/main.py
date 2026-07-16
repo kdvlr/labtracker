@@ -263,19 +263,36 @@ def describe_test_type(tt_id: int, member_id: Optional[int] = None):
 
                 # Fetch other test types in the same category
                 related_rows = conn.execute(
-                    """SELECT name 
+                    """SELECT id, name, canonical_unit 
                        FROM test_types 
                        WHERE category = ? AND id != ?""",
                     (row["category"], tt_id)
                 ).fetchall()
-                related_names = [r["name"] for r in related_rows]
-                related_str = ", ".join(related_names[:5]) if related_names else "none"
+                
+                # Fetch latest readings for all related test types
+                related_readings = []
+                for rr in related_rows:
+                    latest_rel = conn.execute(
+                        """SELECT value_canonical, flag, taken_at 
+                           FROM results 
+                           WHERE member_id = ? AND test_type_id = ? 
+                           ORDER BY taken_at DESC LIMIT 1""",
+                        (member_id, rr["id"])
+                    ).fetchone()
+                    if latest_rel:
+                        val_str = f"{round(latest_rel['value_canonical'], 3)} {rr['canonical_unit'] or ''}"
+                        flag_str = f" ({latest_rel['flag']})" if latest_rel['flag'] else ""
+                        related_readings.append(f"- {rr['name']}: {val_str}{flag_str} (taken {latest_rel['taken_at']})")
+                    else:
+                        related_readings.append(f"- {rr['name']}: No readings on file")
+                
+                related_readings_str = "\n".join(related_readings) if related_readings else "none"
 
                 member_context = (
                     f"Write this clinical reference guide specifically for the patient: "
                     f"Name: {member['name']}, Age: {age_str}, Sex: {sex}.\n"
-                    f"Patient's Latest Result: {latest_str}\n"
-                    f"Related tests in the same category ({row['category']}): {related_str}.\n"
+                    f"Patient's Latest Result for {row['name']}: {latest_str}\n"
+                    f"Patient's Latest Results for Related Tests in the same panel ({row['category']}):\n{related_readings_str}\n"
                 )
 
         if member_id is not None and member_context:
@@ -300,8 +317,9 @@ def describe_test_type(tt_id: int, member_id: Optional[int] = None):
                 f"2. **high**: Ramifications of a high level.\n"
                 f"3. **low**: Ramifications of a low level.\n"
                 f"4. **age_related**: Note any relevant observations or normal shifts for a {age_str} patient.\n"
-                f"5. **related_tests**: Explain how this biomarker relates to other tests in the same panel ({related_str}), and how to interpret their results together."
+                f"5. **related_tests**: Summarize and interpret how the patient's latest reading for this biomarker tracks and integrates with their latest results for the related tests in the same panel (listed below). Explain what the combined clinical picture means in plain language:\n{related_readings_str}"
             )
+
             try:
                 import json
                 text = ai.chat(provider, model, key, system_prompt, prompt).strip()
