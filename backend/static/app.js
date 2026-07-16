@@ -724,9 +724,8 @@ function zoneLegend(zones, value, canonical_unit) {
   }
 
   // tabs
-  if (state._detail.tab === "description") state._detail.tab = "results";
-  state._detail.tab = state._detail.tab || "results";
-  const tabNames = [["results", "Your Results"], ["family", "Family"], ["related", "Related Tests"]];
+  state._detail.tab = state._detail.tab || "description";
+  const tabNames = [["description", "Description"], ["results", "Your Results"], ["family", "Family"], ["related", "Related Tests"]];
   const tabContent = el("div", { style: "margin-top:18px" });
   const tabs = el("div", { class: "tabs" }, tabNames.map(([key, label]) =>
     el("button", { class: "tab" + (state._detail.tab === key ? " active" : ""), onclick: () => { state._detail.tab = key; paintTab(); tabs.querySelectorAll(".tab").forEach((b, i) => b.classList.toggle("active", tabNames[i][0] === key)); } }, label)
@@ -735,12 +734,14 @@ function zoneLegend(zones, value, canonical_unit) {
 
   function paintTab() {
     tabContent.innerHTML = "";
-    if (state._detail.tab === "related") tabContent.append(relatedSection(member, summary, t));
+    if (state._detail.tab === "description") tabContent.append(descriptionSection(t));
+    else if (state._detail.tab === "related") tabContent.append(relatedSection(member, summary, t));
     else if (state._detail.tab === "family") tabContent.append(familySection(t, displayUnit, convert));
     else tabContent.append(resultsSection(t, rows, convert, displayUnit));
   }
   paintTab();
 }
+
 
 
 function resultsSection(t, rows, convert, displayUnit) {
@@ -794,7 +795,7 @@ function sanitizeDescText(text, label) {
   return clean;
 }
 
-function renderStructuredDesc(container, descObj) {
+function renderDescriptionTabContent(container, descObj) {
   const descText = sanitizeDescText(descObj.description, "Description");
   if (descText && descText !== "N/A" && descText !== "none") {
     container.append(el("div", { class: "desc-block desc-hero" }, [
@@ -841,20 +842,23 @@ function renderStructuredDesc(container, descObj) {
     ]));
   }
 
-  const relatedText = sanitizeDescText(descObj.related_tests, "Related Tests");
-  if (relatedText && relatedText !== "N/A" && relatedText !== "none") {
-    grid.append(el("div", { class: "desc-block related" }, [
-      el("div", { class: "desc-label" }, [
-        el("span", { class: "desc-icon" }, "🧪"),
-        el("span", { class: "desc-title" }, "Related Tests")
-      ]),
-      el("p", { class: "desc-body-text" }, relatedText)
-    ]));
-  }
-
   container.append(grid);
 }
 
+function renderAiSummary(container, descObj) {
+  const relatedText = sanitizeDescText(descObj.related_tests, "Related Tests");
+  if (relatedText && relatedText !== "N/A" && relatedText !== "none") {
+    container.append(el("div", { class: "desc-block related", style: "border-left: 4px solid var(--accent); background: var(--panel-2);" }, [
+      el("div", { class: "desc-label" }, [
+        el("span", { class: "desc-icon", style: "color: var(--accent);" }, "🧪"),
+        el("span", { class: "desc-title", style: "color: var(--accent);" }, "Clinical Summary & Panel Relations")
+      ]),
+      el("p", { class: "desc-body-text" }, relatedText)
+    ]));
+  } else {
+    container.append(el("div", { class: "empty" }, "No dynamic panel summary available."));
+  }
+}
 
 function aiSummaryBlock(t, member) {
   const container = el("div", { class: "ai-summary-container", style: "margin-bottom: 24px;" });
@@ -884,11 +888,25 @@ function aiSummaryBlock(t, member) {
     const url = `/test-types/${t.id}/describe?member_id=${member.id}` + (force ? "&force_refresh=true" : "");
     api(url, { method: "POST", body: {} })
       .then((res) => {
+        state._detail.description = res.description;
+        state._detail.generated_at = res.generated_at;
+        
         body.innerHTML = "";
-        renderStructuredDesc(body, res.description);
+        renderAiSummary(body, res.description);
+        
         if (timeSpan) {
           const dt = res.generated_at ? new Date(res.generated_at + "Z").toLocaleString() : "just now";
           timeSpan.textContent = `Generated: ${dt}`;
+        }
+        
+        // Repaint Description tab if currently viewing it to stay in sync
+        const activeTabContent = document.querySelector(".tabs .tab.active");
+        if (activeTabContent && activeTabContent.textContent.trim() === "Description") {
+          const tabContentDiv = document.querySelector(".tabs").nextSibling;
+          if (tabContentDiv) {
+            tabContentDiv.innerHTML = "";
+            tabContentDiv.append(descriptionSection(t));
+          }
         }
       })
       .catch((e) => {
@@ -901,6 +919,45 @@ function aiSummaryBlock(t, member) {
   fetchSummary(false);
   return container;
 }
+
+function descriptionSection(t) {
+  const container = el("div", { style: "display: flex; flex-direction: column; gap: 14px;" });
+  if (state._detail.description) {
+    renderDescriptionTabContent(container, state._detail.description);
+    return container;
+  }
+  const loadingCard = el("div", { class: "card", id: "desc-body" }, [
+    el("p", { class: "desc-text" }, [el("span", { class: "spinner" }), " Generating clinical reference…"])
+  ]);
+  container.append(loadingCard);
+  
+  const { member } = state._detail;
+  api(`/test-types/${t.id}/describe?member_id=${member.id}`, { method: "POST", body: {} })
+    .then((res) => {
+      state._detail.description = res.description;
+      state._detail.generated_at = res.generated_at;
+      const b = container.querySelector("#desc-body");
+      if (b) b.remove();
+      renderDescriptionTabContent(container, res.description);
+      
+      const timeSpan = document.getElementById("ai-generated-time");
+      if (timeSpan) {
+        const dt = res.generated_at ? new Date(res.generated_at + "Z").toLocaleString() : "just now";
+        timeSpan.textContent = `Generated: ${dt}`;
+      }
+      const topBody = document.getElementById("ai-summary-body");
+      if (topBody) {
+        topBody.innerHTML = "";
+        renderAiSummary(topBody, res.description);
+      }
+    })
+    .catch((e) => {
+      const b = container.querySelector("#desc-body");
+      if (b) b.innerHTML = `<p class="warn">Couldn't generate description: ${e.message}</p>`;
+    });
+  return container;
+}
+
 
 
 
