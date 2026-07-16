@@ -900,9 +900,29 @@ def get_settings():
         for p in ("anthropic", "openai", "gemini"):
             k = f"ai_key_{p}"
             out[f"has_key_{p}"] = bool(out.pop(k, None))
+        
+        # Add commit SHA
+        import os
+        commit_sha = os.environ.get("COMMIT_SHA", "")
+        if not commit_sha:
+            try:
+                if os.path.exists("/app/commit_sha.txt"):
+                    with open("/app/commit_sha.txt", "r") as f:
+                        commit_sha = f.read().strip()
+            except Exception:
+                pass
+        if not commit_sha:
+            try:
+                import subprocess
+                commit_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL).decode("utf-8").strip()
+            except Exception:
+                pass
+        out["commit_sha"] = commit_sha
+        
         return out
     finally:
         conn.close()
+
 
 
 @app.put("/api/settings")
