@@ -270,40 +270,99 @@ def describe_test_type(tt_id: int, member_id: Optional[int] = None):
 
         if member_id is not None and member_context:
             system_prompt = (
-                "You are an expert clinical reference assistant explaining lab test results. "
-                "Your goal is to write a clear, personalized, and educational reference guide for a family member. "
-                "Format your response with clear sections/headings using Markdown. Do not include any meta-announcements, "
-                "introductions, or medical-advice disclaimers (these are handled by the main UI)."
+                "You are an expert clinical reference assistant explaining lab test results for a family member. "
+                "You must return ONLY a valid JSON object matching this schema:\n"
+                "{\n"
+                "  \"description\": \"Personalized description of what this biomarker measures and why it matters.\",\n"
+                "  \"high\": \"Personalized clinical ramifications and details of a high level.\",\n"
+                "  \"low\": \"Personalized clinical ramifications and details of a low level.\",\n"
+                "  \"age_related\": \"Observations or considerations relevant to a patient of this age.\",\n"
+                "  \"related_tests\": \"How to interpret this result in conjunction with related panel tests.\"\n"
+                "}\n"
+                "Do not include any prose outside the JSON object. Do not include markdown fences."
             )
             prompt = (
                 f"{member_context}\n"
                 f"Biomarker: {row['name']}" + (f" (measured in {row['canonical_unit']})" if row['canonical_unit'] else "") + ".\n"
                 f"Reference range limits: low {row['ref_low'] or 'n/a'}, high {row['ref_high'] or 'n/a'}.\n\n"
                 f"Please write a guide that addresses the following:\n"
-                f"1. **What this test measures & why it matters**: Explain the biomarker clearly, what the reference ranges mean, and the clinical implications of high vs. low levels.\n"
-                f"2. **Observations based on age**: Note any relevant observations or normal shifts for a {age_str} patient.\n"
-                f"3. **Interpretation of latest results**: Reference the patient's latest reading ({latest_str}) and translate it into plain language (is it normal, high, or low, and what should they keep in mind).\n"
-                f"4. **Related tests**: Explain how this biomarker relates to other tests in the same panel ({related_str}), and how to interpret their results together (e.g. if this is liver enzymes, how they track together)."
+                f"1. **description**: Explain the biomarker clearly, what the reference ranges mean, and why it matters.\n"
+                f"2. **high**: Ramifications of a high level.\n"
+                f"3. **low**: Ramifications of a low level.\n"
+                f"4. **age_related**: Note any relevant observations or normal shifts for a {age_str} patient.\n"
+                f"5. **related_tests**: Explain how this biomarker relates to other tests in the same panel ({related_str}), and how to interpret their results together."
             )
             try:
+                import json
                 text = ai.chat(provider, model, key, system_prompt, prompt).strip()
-            except ai.AIError as e:
-                raise HTTPException(400, str(e))
-            return {"description": text, "cached": False}
+                if text.startswith("```"):
+                    lines = text.split("\n")
+                    if lines[0].startswith("```json"):
+                        text = "\n".join(lines[1:-1])
+                    elif lines[0].startswith("```"):
+                        text = "\n".join(lines[1:-1])
+                parsed = json.loads(text)
+            except Exception as e:
+                parsed = {
+                    "description": text,
+                    "high": "Clinical review suggested.",
+                    "low": "Clinical review suggested.",
+                    "age_related": "Refer to guidelines.",
+                    "related_tests": "See related tests tab."
+                }
+            return {"description": parsed, "cached": False}
         else:
             if row["description"]:
-                return {"description": row["description"], "cached": True}
-            system_prompt = DESCRIBE_SYSTEM
+                import json
+                try:
+                    parsed = json.loads(row["description"])
+                    return {"description": parsed, "cached": True}
+                except ValueError:
+                    return {"description": {
+                        "description": row["description"],
+                        "high": "Refer to doctor.",
+                        "low": "Refer to doctor.",
+                        "age_related": "Standard limits apply.",
+                        "related_tests": "See related tests."
+                    }, "cached": True}
+            
+            system_prompt = (
+                "You are an expert clinical reference assistant explaining lab test results. "
+                "You must return ONLY a valid JSON object matching this schema:\n"
+                "{\n"
+                "  \"description\": \"Description of what this biomarker measures and why it matters.\",\n"
+                "  \"high\": \"Clinical ramifications and details of a high level.\",\n"
+                "  \"low\": \"Clinical ramifications and details of a low level.\",\n"
+                "  \"age_related\": \"General observations or considerations relevant by age.\",\n"
+                "  \"related_tests\": \"How this tracks with other biomarkers in the same panel.\"\n"
+                "}\n"
+                "Do not include any prose outside the JSON object. Do not include markdown fences."
+            )
             prompt = f"Biomarker: {row['name']}" + (f" (measured in {row['canonical_unit']})" if row["canonical_unit"] else "") + "."
             try:
+                import json
                 text = ai.chat(provider, model, key, system_prompt, prompt).strip()
-            except ai.AIError as e:
-                raise HTTPException(400, str(e))
-            conn.execute("UPDATE test_types SET description = ? WHERE id = ?", (text, tt_id))
+                if text.startswith("```"):
+                    lines = text.split("\n")
+                    if lines[0].startswith("```json"):
+                        text = "\n".join(lines[1:-1])
+                    elif lines[0].startswith("```"):
+                        text = "\n".join(lines[1:-1])
+                parsed = json.loads(text)
+            except Exception as e:
+                parsed = {
+                    "description": text,
+                    "high": "Clinical review suggested.",
+                    "low": "Clinical review suggested.",
+                    "age_related": "Refer to guidelines.",
+                    "related_tests": "See related tests."
+                }
+            conn.execute("UPDATE test_types SET description = ? WHERE id = ?", (json.dumps(parsed), tt_id))
             conn.commit()
-            return {"description": text, "cached": False}
+            return {"description": parsed, "cached": False}
     finally:
         conn.close()
+
 
 
 

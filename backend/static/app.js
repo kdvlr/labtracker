@@ -723,30 +723,53 @@ function resultsSection(t, rows, convert, displayUnit) {
   return el("div", { class: "card" }, table);
 }
 
+function renderStructuredDesc(container, descObj) {
+  const items = [
+    { label: "Description", text: descObj.description, icon: "📋", cls: "" },
+    { label: "High", text: descObj.high, icon: "▲ High", cls: "high" },
+    { label: "Low", text: descObj.low, icon: "▼ Low", cls: "low" },
+    { label: "Age Related Details", text: descObj.age_related, icon: "🎂", cls: "info" },
+    { label: "Related Tests", text: descObj.related_tests, icon: "🧪", cls: "related" },
+  ];
+
+  for (const item of items) {
+    if (!item.text || item.text === "N/A" || item.text === "none") continue;
+    
+    container.append(el("div", { class: `desc-block ${item.cls}` }, [
+      el("div", { class: "desc-label" }, [
+        el("span", { class: "desc-icon" }, item.icon),
+        el("span", { class: "desc-title" }, item.label)
+      ]),
+      el("p", { class: "desc-body-text" }, item.text)
+    ]));
+  }
+}
+
 function descriptionSection(t) {
   const { member } = state._detail;
-  const card = el("div", { class: "card" });
+  const container = el("div", { style: "display: flex; flex-direction: column; gap: 14px;" });
   if (state._detail.description) {
-    card.append(el("p", { class: "desc-text", style: "white-space: pre-wrap;" }, state._detail.description));
-    return card;
+    renderStructuredDesc(container, state._detail.description);
+    return container;
   }
-  card.append(el("p", { class: "desc-text", id: "desc-body" }, [el("span", { class: "spinner" }), " Generating clinical reference…"]));
+  const loadingCard = el("div", { class: "card", id: "desc-body" }, [
+    el("p", { class: "desc-text" }, [el("span", { class: "spinner" }), " Generating clinical reference…"])
+  ]);
+  container.append(loadingCard);
   api(`/test-types/${t.id}/describe?member_id=${member.id}`, { method: "POST", body: {} })
     .then((res) => {
       state._detail.description = res.description;
-      const b = card.querySelector("#desc-body");
-      if (b) {
-        b.style.whiteSpace = "pre-wrap";
-        b.textContent = res.description;
-        b.removeAttribute("id");
-      }
+      const b = container.querySelector("#desc-body");
+      if (b) b.remove();
+      renderStructuredDesc(container, res.description);
     })
     .catch((e) => {
-      const b = card.querySelector("#desc-body");
-      if (b) b.textContent = "Couldn't generate a description: " + e.message;
+      const b = container.querySelector("#desc-body");
+      if (b) b.innerHTML = `<p class="warn">Couldn't generate a description: ${e.message}</p>`;
     });
-  return card;
+  return container;
 }
+
 
 
 function relatedSection(member, summary, t) {
