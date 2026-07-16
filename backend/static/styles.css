@@ -290,13 +290,23 @@ body {
 .rbar-seg { position: absolute; top: 0; bottom: 0; }
 .rbar-marker {
   position: absolute; top: 50%; transform: translate(-50%, -50%);
-  background: var(--panel); border: 2px solid var(--range-in); color: var(--text-primary);
-  font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
-  padding: 2px 7px; border-radius: 8px; white-space: nowrap; box-shadow: var(--shadow-sm); z-index: 2;
+  font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums;
+  padding: 3px 8px; border-radius: 8px; white-space: nowrap; box-shadow: var(--shadow-sm); z-index: 2;
+  border: 1px solid transparent;
 }
-.rbar-marker.green { border-color: var(--range-in); }
-.rbar-marker.amber { border-color: var(--low); }
-.rbar-marker.red { border-color: var(--high); }
+.rbar-marker.green {
+  color: var(--good); background: var(--good-soft);
+  border-color: color-mix(in srgb, var(--good) 30%, transparent);
+}
+.rbar-marker.amber {
+  color: var(--low); background: var(--low-soft);
+  border-color: color-mix(in srgb, var(--low) 40%, transparent);
+}
+.rbar-marker.red {
+  color: var(--high); background: var(--high-soft);
+  border-color: color-mix(in srgb, var(--high) 30%, transparent);
+}
+
 .rbar-labels { position: relative; height: 16px; margin-top: 7px; }
 .rbar-labels span { position: absolute; transform: translateX(-50%); color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .rbar-none { margin-top: 16px; color: var(--muted); font-size: 12.5px; }

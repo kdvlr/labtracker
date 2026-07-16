@@ -599,13 +599,17 @@ function rangeBar(value, zones) {
     if (r > l) track.append(el("div", { class: "rbar-seg", style: `left:${l.toFixed(1)}%;width:${(r - l).toFixed(1)}%;background:${fill[z.c]}` }));
     prev = to;
   }
+  
+  const wrap = el("div", { style: "position: relative;" });
+  wrap.append(track);
   const vz = zoneOf(value, zones);
-  track.append(el("div", { class: "rbar-marker " + vz.c, style: `left:${pos(value).toFixed(1)}%` }, fmtNum(value)));
+  wrap.append(el("div", { class: "rbar-marker " + vz.c, style: `left:${pos(value).toFixed(1)}%` }, fmtNum(value)));
 
   const labels = el("div", { class: "rbar-labels" });
   const seen = new Set();
   for (const z of zones) if (z.to != null && !seen.has(z.to)) { seen.add(z.to); labels.append(el("span", { style: `left:${pos(z.to).toFixed(1)}%` }, fmtNum(z.to))); }
-  return el("div", { class: "rbar" }, [track, labels]);
+  return el("div", { class: "rbar" }, [wrap, labels]);
+
 }
 
 async function openDetail(member, testTypeId) {
