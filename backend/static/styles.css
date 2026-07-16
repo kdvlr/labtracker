@@ -467,3 +467,59 @@ textarea { resize: vertical; }
   .main { padding: 22px 20px 60px; }
   .page-title { font-size: 24px; }
 }
+
+/* structured description blocks */
+.desc-block {
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.desc-block.high {
+  border-color: color-mix(in srgb, var(--high) 25%, transparent);
+  background: var(--high-soft);
+}
+.desc-block.low {
+  border-color: color-mix(in srgb, var(--low) 25%, transparent);
+  background: var(--low-soft);
+}
+.desc-block.info {
+  border-color: color-mix(in srgb, var(--accent) 25%, transparent);
+  background: var(--accent-soft);
+}
+.desc-block.related {
+  border-color: var(--border);
+  background: var(--panel-2);
+}
+.desc-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.desc-icon {
+  font-size: 13px;
+  font-weight: 700;
+}
+.desc-title {
+  font-size: 13.5px;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+.desc-block.high .desc-title, .desc-block.high .desc-icon {
+  color: var(--high);
+}
+.desc-block.low .desc-title, .desc-block.low .desc-icon {
+  color: var(--low);
+}
+.desc-block.info .desc-title, .desc-block.info .desc-icon {
+  color: var(--accent);
+}
+.desc-body-text {
+  margin: 0;
+  line-height: 1.6;
+  font-size: 14px;
+  color: var(--text-primary);
+}
