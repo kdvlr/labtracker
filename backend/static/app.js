@@ -718,8 +718,15 @@ function zoneLegend(zones, value, canonical_unit) {
   }
   main.append(card);
 
+  // AI Generated Summary (above the tabs)
+  if (last) {
+    main.append(aiSummaryBlock(t, member));
+  }
+
   // tabs
-  const tabNames = [["description", "Description"], ["results", "Your Results"], ["family", "Family"], ["related", "Related Tests"]];
+  if (state._detail.tab === "description") state._detail.tab = "results";
+  state._detail.tab = state._detail.tab || "results";
+  const tabNames = [["results", "Your Results"], ["family", "Family"], ["related", "Related Tests"]];
   const tabContent = el("div", { style: "margin-top:18px" });
   const tabs = el("div", { class: "tabs" }, tabNames.map(([key, label]) =>
     el("button", { class: "tab" + (state._detail.tab === key ? " active" : ""), onclick: () => { state._detail.tab = key; paintTab(); tabs.querySelectorAll(".tab").forEach((b, i) => b.classList.toggle("active", tabNames[i][0] === key)); } }, label)
@@ -728,13 +735,13 @@ function zoneLegend(zones, value, canonical_unit) {
 
   function paintTab() {
     tabContent.innerHTML = "";
-    if (state._detail.tab === "description") tabContent.append(descriptionSection(t));
-    else if (state._detail.tab === "related") tabContent.append(relatedSection(member, summary, t));
+    if (state._detail.tab === "related") tabContent.append(relatedSection(member, summary, t));
     else if (state._detail.tab === "family") tabContent.append(familySection(t, displayUnit, convert));
     else tabContent.append(resultsSection(t, rows, convert, displayUnit));
   }
   paintTab();
 }
+
 
 function resultsSection(t, rows, convert, displayUnit) {
   if (!rows.length) return el("div", { class: "empty" }, "No results yet.");
@@ -849,30 +856,52 @@ function renderStructuredDesc(container, descObj) {
 }
 
 
-function descriptionSection(t) {
-  const { member } = state._detail;
-  const container = el("div", { style: "display: flex; flex-direction: column; gap: 14px;" });
-  if (state._detail.description) {
-    renderStructuredDesc(container, state._detail.description);
-    return container;
-  }
-  const loadingCard = el("div", { class: "card", id: "desc-body" }, [
-    el("p", { class: "desc-text" }, [el("span", { class: "spinner" }), " Generating clinical reference…"])
+function aiSummaryBlock(t, member) {
+  const container = el("div", { class: "ai-summary-container", style: "margin-bottom: 24px;" });
+  const head = el("div", { style: "display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;" }, [
+    el("h2", { style: "margin: 0; font-size: 14px; font-weight: 750; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.05em;" }, "AI Generated Summary"),
+    el("div", { style: "display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted);" }, [
+      el("span", { id: "ai-generated-time" }, "Checking cache..."),
+      el("button", { 
+        class: "btn btn-sm ghost-btn", 
+        style: "padding: 3px 8px; font-size: 11px; display: flex; align-items: center; gap: 4px; border: 1px solid var(--border); border-radius: 6px;",
+        onclick: () => fetchSummary(true)
+      }, [el("span", {}, "🔄"), "Regenerate"])
+    ])
   ]);
-  container.append(loadingCard);
-  api(`/test-types/${t.id}/describe?member_id=${member.id}`, { method: "POST", body: {} })
-    .then((res) => {
-      state._detail.description = res.description;
-      const b = container.querySelector("#desc-body");
-      if (b) b.remove();
-      renderStructuredDesc(container, res.description);
-    })
-    .catch((e) => {
-      const b = container.querySelector("#desc-body");
-      if (b) b.innerHTML = `<p class="warn">Couldn't generate a description: ${e.message}</p>`;
-    });
+  container.append(head);
+
+  const body = el("div", { id: "ai-summary-body" });
+  container.append(body);
+
+  function fetchSummary(force = false) {
+    body.innerHTML = "";
+    body.append(el("p", { class: "desc-text" }, [el("span", { class: "spinner" }), " Analyzing biomarkers & generating summary…"]));
+    
+    const timeSpan = head.querySelector("#ai-generated-time");
+    if (timeSpan) timeSpan.textContent = "...";
+
+    const url = `/test-types/${t.id}/describe?member_id=${member.id}` + (force ? "&force_refresh=true" : "");
+    api(url, { method: "POST", body: {} })
+      .then((res) => {
+        body.innerHTML = "";
+        renderStructuredDesc(body, res.description);
+        if (timeSpan) {
+          const dt = res.generated_at ? new Date(res.generated_at + "Z").toLocaleString() : "just now";
+          timeSpan.textContent = `Generated: ${dt}`;
+        }
+      })
+      .catch((e) => {
+        body.innerHTML = "";
+        body.append(el("p", { class: "warn" }, "Couldn't generate summary: " + e.message));
+        if (timeSpan) timeSpan.textContent = "Error";
+      });
+  }
+
+  fetchSummary(false);
   return container;
 }
+
 
 
 
