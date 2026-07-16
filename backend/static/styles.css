@@ -295,17 +295,18 @@ body {
   border: 1px solid transparent;
 }
 .rbar-marker.green {
-  color: var(--good); background: var(--good-soft);
-  border-color: color-mix(in srgb, var(--good) 30%, transparent);
+  color: #ffffff; background: var(--good);
+  border-color: var(--good);
 }
 .rbar-marker.amber {
-  color: var(--low); background: var(--low-soft);
-  border-color: color-mix(in srgb, var(--low) 40%, transparent);
+  color: #ffffff; background: var(--low);
+  border-color: var(--low);
 }
 .rbar-marker.red {
-  color: var(--high); background: var(--high-soft);
-  border-color: color-mix(in srgb, var(--high) 30%, transparent);
+  color: #ffffff; background: var(--high);
+  border-color: var(--high);
 }
+
 
 .rbar-labels { position: relative; height: 16px; margin-top: 7px; }
 .rbar-labels span { position: absolute; transform: translateX(-50%); color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
