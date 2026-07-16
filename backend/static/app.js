@@ -1408,8 +1408,23 @@ async function renderSettings(main) {
       render();
     } }, "Save settings"),
   ]);
+  
+  if (s.commit_sha) {
+    card.append(
+      el("div", { style: "margin-top: 24px; padding-top: 14px; border-top: 1px solid var(--border); font-size: 12.5px; color: var(--muted); display: flex; align-items: center; gap: 6px;" }, [
+        "Last Deployed Build:",
+        el("a", {
+          href: `https://github.com/kdvlr/labtracker/commit/${s.commit_sha}`,
+          target: "_blank",
+          style: "font-family: monospace; font-weight: 600; text-decoration: underline; color: var(--accent);"
+        }, s.commit_sha.slice(0, 7))
+      ])
+    );
+  }
+
   main.append(card);
 }
+
 
 // ---------------- ask AI modal ----------------
 async function openAsk(member) {
