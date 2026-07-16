@@ -343,8 +343,21 @@ input, select, textarea {
   font: inherit; font-size: 14px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);
   background: var(--panel-2); color: var(--text-primary); transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
+input[type="file"] {
+  padding: 6px 10px;
+}
+input[type="file"]::file-selector-button {
+  font: inherit; font-size: 12.5px; font-weight: 600;
+  background: var(--panel); color: var(--text-primary); border: 1px solid var(--border);
+  padding: 4px 10px; border-radius: 6px; cursor: pointer; margin-right: 10px;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+input[type="file"]::file-selector-button:hover {
+  background: var(--page);
+}
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 textarea { resize: vertical; }
+
 .row { display: flex; gap: 14px; flex-wrap: wrap; }
 .row > * { flex: 1; min-width: 130px; }
 
