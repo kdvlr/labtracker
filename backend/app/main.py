@@ -23,6 +23,16 @@ from .units import compute_flag, known_units, to_canonical, to_number
 app = FastAPI(title="LabTracker")
 
 
+@app.middleware("http")
+async def add_no_cache_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, private"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+
+
 @app.on_event("startup")
 def _startup():
     init_db()
