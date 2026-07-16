@@ -720,14 +720,30 @@ function resultsSection(t, rows, convert, displayUnit) {
 }
 
 function descriptionSection(t) {
+  const { member } = state._detail;
   const card = el("div", { class: "card" });
-  if (t.description) { card.append(el("p", { class: "desc-text" }, t.description)); return card; }
-  card.append(el("p", { class: "desc-text", id: "desc-body" }, [el("span", { class: "spinner" }), " Generating a description with AI…"]));
-  api(`/test-types/${t.id}/describe`, { method: "POST", body: {} })
-    .then((res) => { t.description = res.description; const b = card.querySelector("#desc-body"); if (b) { b.textContent = res.description; b.removeAttribute("id"); } })
-    .catch((e) => { const b = card.querySelector("#desc-body"); if (b) b.textContent = "Couldn't generate a description: " + e.message; });
+  if (state._detail.description) {
+    card.append(el("p", { class: "desc-text", style: "white-space: pre-wrap;" }, state._detail.description));
+    return card;
+  }
+  card.append(el("p", { class: "desc-text", id: "desc-body" }, [el("span", { class: "spinner" }), " Generating clinical reference…"]));
+  api(`/test-types/${t.id}/describe?member_id=${member.id}`, { method: "POST", body: {} })
+    .then((res) => {
+      state._detail.description = res.description;
+      const b = card.querySelector("#desc-body");
+      if (b) {
+        b.style.whiteSpace = "pre-wrap";
+        b.textContent = res.description;
+        b.removeAttribute("id");
+      }
+    })
+    .catch((e) => {
+      const b = card.querySelector("#desc-body");
+      if (b) b.textContent = "Couldn't generate a description: " + e.message;
+    });
   return card;
 }
+
 
 function relatedSection(member, summary, t) {
   const related = summary.filter((s) => s.test_type_id !== t.id && (s.category || "Other") === (t.category || "Other")).slice(0, 8);
