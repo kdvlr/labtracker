@@ -39,7 +39,27 @@ def _ai_config(conn, override_provider=None, override_model=None):
     provider = override_provider or _get_setting(conn, "ai_provider", "anthropic")
     model = override_model or _get_setting(conn, f"ai_model_{provider}") or None
     key = _get_setting(conn, f"ai_key_{provider}")
+    
+    # If key is not in DB, check environment variables
+    if not key:
+        import os
+        env_vars = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY", "gemini": "GEMINI_API_KEY"}
+        key = os.environ.get(env_vars.get(provider, ""))
+        
+    # Auto-fallback if the chosen provider has no key but another one does
+    if not key and not override_provider:
+        import os
+        for p in ("gemini", "openai", "anthropic"):
+            if p == provider:
+                continue
+            k = _get_setting(conn, f"ai_key_{p}") or os.environ.get(f"{p.upper()}_API_KEY")
+            if k:
+                provider = p
+                model = _get_setting(conn, f"ai_model_{p}") or None
+                key = k
+                break
     return provider, model, key
+
 
 
 def _test_types(conn) -> list:

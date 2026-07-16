@@ -1336,7 +1336,9 @@ async function renderSettings(main) {
   ])));
 
   const providerSel = el("select");
-  for (const p of ["anthropic", "openai", "gemini"]) providerSel.append(el("option", { value: p, ...(s.ai_provider === p ? { selected: "" } : {}) }, p[0].toUpperCase() + p.slice(1)));
+  const activeProvider = s.ai_provider || (s.has_key_gemini ? "gemini" : (s.has_key_openai ? "openai" : "anthropic"));
+  for (const p of ["anthropic", "openai", "gemini"]) providerSel.append(el("option", { value: p, ...(activeProvider === p ? { selected: "" } : {}) }, p[0].toUpperCase() + p.slice(1)));
+
 
   const fields = {};
   const mk = (label, key, ph) => {
