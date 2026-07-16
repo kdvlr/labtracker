@@ -653,16 +653,52 @@ async function renderDetail(main) {
     ]),
   ]));
 
+function zoneLegend(zones, value, canonical_unit) {
+  const wrap = el("div", { style: "display: flex; gap: 16px; margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border); flex-wrap: wrap;" });
+  let prev = null;
+  const activeZone = zoneOf(value, zones);
+  for (let i = 0; i < zones.length; i++) {
+    const z = zones[i];
+    const to = z.to;
+    let rangeText = "";
+    if (prev === null) {
+      rangeText = to != null ? `< ${fmtNum(to)}` : "All values";
+    } else if (to == null) {
+      rangeText = `> ${fmtNum(prev)}`;
+    } else {
+      rangeText = `${fmtNum(prev)} – ${fmtNum(to)}`;
+    }
+    prev = to;
+
+    const fill = { green: "var(--good)", amber: "var(--low)", red: "var(--high)" };
+    const isActive = (z === activeZone);
+    const activeStyle = isActive ? "font-weight: 750; color: var(--text-primary);" : "font-weight: 500; color: var(--text-secondary);";
+    const dotStyle = `width: 7px; height: 7px; border-radius: 50%; background: ${fill[z.c]}; display: inline-block; transition: all 0.15s ease; ${isActive ? "transform: scale(1.4); box-shadow: 0 0 4px " + fill[z.c] + ";" : ""}`;
+
+    wrap.append(el("div", { style: `display: flex; align-items: center; gap: 6px; font-size: 12px; ${activeStyle}` }, [
+      el("span", { style: dotStyle }),
+      el("span", {}, z.label),
+      el("span", { style: "color: var(--muted); font-size: 11px;" }, `(${rangeText} ${canonical_unit || ""})`)
+    ]));
+  }
+  return wrap;
+}
+
   // headline value + multi-zone bar
   if (last) {
-    main.append(el("div", { class: "card", style: "margin-bottom:20px" }, [
+    const headlineCard = el("div", { class: "card", style: "margin-bottom:20px" }, [
       el("div", { class: "bio-value " + c, style: "font-size:26px" }, [
         fmtNum(last.value_canonical), t.canonical_unit ? el("span", { class: "u" }, t.canonical_unit) : null,
       ]),
       el("div", { class: "bio-date", style: "margin-bottom:2px" }, `Latest · ${fmtDate(last.taken_at)}`),
       rangeBar(last.value_canonical, zones),
-    ]));
+    ]);
+    if (zones && zones.length) {
+      headlineCard.append(zoneLegend(zones, last.value_canonical, t.canonical_unit));
+    }
+    main.append(headlineCard);
   }
+
 
   const displayUnit = state._detail.unit;
   const convert = converter(t, displayUnit);
