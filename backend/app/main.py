@@ -1281,9 +1281,10 @@ class SettingsIn(BaseModel):
 
 
 @app.get("/api/settings")
-def get_settings():
+def get_settings(request: Request):
     conn = get_db()
     try:
+        _require_unlocked(conn, request)
         rows = conn.execute("SELECT key, value FROM settings").fetchall()
         out = {r["key"]: r["value"] for r in rows}
         # never leak raw keys; report presence only
@@ -1316,9 +1317,10 @@ def get_settings():
 
 
 @app.put("/api/settings")
-def put_settings(s: SettingsIn):
+def put_settings(s: SettingsIn, request: Request):
     conn = get_db()
     try:
+        _require_unlocked(conn, request)
         for key, value in s.model_dump().items():
             if value is None:
                 continue
