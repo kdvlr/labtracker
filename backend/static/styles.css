@@ -236,8 +236,9 @@ body {
 .card {
   background: var(--panel); border: 1px solid var(--border);
   border-radius: var(--radius); box-shadow: var(--shadow); padding: 24px 28px;
-  transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.2s ease, background-color 0.2s ease;
 }
+.card.dragover { border-color: var(--accent); background: var(--accent-soft); }
 .tests-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: 20px; }
 .category-label { font-family: var(--sans-display); font-size: 13.5px; font-weight: 750; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent-2); margin: 36px 0 16px; display: flex; align-items: center; gap: 12px; }
 .category-label::after { content: ""; flex: 1; height: 1px; background: var(--border); }
