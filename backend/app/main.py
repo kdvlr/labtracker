@@ -434,6 +434,23 @@ def describe_test_type(tt_id: int, member_id: Optional[int] = None, force_refres
 
 
 
+def sanitize_name(text: str) -> str:
+    # replace non-alphanumeric with underscores, stripping duplicate underscores
+    clean = re.sub(r'[^a-zA-Z0-9]', '_', text)
+    clean = re.sub(r'_+', '_', clean)
+    return clean.strip('_')
+
+
+def match_patient_name(member_name: str, patient_name: str) -> bool:
+    if not patient_name or not patient_name.strip():
+        # If the report has no patient name, allow it (best effort)
+        return True
+    m_tokens = set(re.findall(r'[a-zA-Z0-9]+', member_name.lower()))
+    p_tokens = set(re.findall(r'[a-zA-Z0-9]+', patient_name.lower()))
+    intersect = m_tokens.intersection(p_tokens)
+    return len(intersect) > 0
+
+
 # ---------------- documents / upload / extract ----------------
 
 @app.post("/api/documents")
@@ -446,16 +463,137 @@ async def upload_document(
         raise HTTPException(400, "Empty file")
     mime = file.content_type or mimetypes.guess_type(file.filename or "")[0] or "application/octet-stream"
     ext = Path(file.filename or "").suffix or mimetypes.guess_extension(mime) or ""
-    stored = f"{uuid.uuid4().hex}{ext}"
-    (FILES_DIR / stored).write_bytes(data)
+    
     conn = get_db()
     try:
+        member = None
+        if member_id:
+            member = conn.execute("SELECT * FROM members WHERE id = ?", (member_id,)).fetchone()
+            if not member:
+                raise HTTPException(404, "Member not found")
+        
+        # 1. AI Extraction
+        provider, model, key = _ai_config(conn)
+        try:
+            parsed = ai.extract(provider, model, key, data, mime)
+        except ai.AIError as e:
+            raise HTTPException(400, f"AI extraction failed: {str(e)}")
+            
+        patient_name = parsed.get("patient_name")
+        report_date = parsed.get("report_date")
+        lab_name = parsed.get("lab_name")
+        
+        # 2. Check if selected name matches the report
+        if member:
+            if not match_patient_name(member["name"], patient_name):
+                raise HTTPException(
+                    400,
+                    f"Patient name mismatch: Report belongs to '{patient_name or 'Unknown'}', but you selected '{member['name']}'."
+                )
+        
+        # 3. Organize in folders and rename appropriately with month/year and collision handling
+        sanitized_person_name = sanitize_name(member["name"]) if member else "unassigned"
+        
+        # Extract month and year
+        test_month = "UnknownMonth"
+        test_year = "UnknownYear"
+        if report_date:
+            try:
+                dt = date.fromisoformat(report_date)
+                test_month = dt.strftime("%B")
+                test_year = str(dt.year)
+            except Exception:
+                m = re.match(r'(\d{4})[-/](\d{2})[-/](\d{2})', report_date)
+                if m:
+                    year_val, month_val = int(m.group(1)), int(m.group(2))
+                    try:
+                        dt = date(year_val, month_val, 1)
+                        test_month = dt.strftime("%B")
+                        test_year = str(dt.year)
+                    except Exception:
+                        pass
+        
+        # Create member folder
+        member_dir = FILES_DIR / sanitized_person_name
+        member_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Collision handling
+        base_filename = f"{sanitized_person_name}_{test_month}_{test_year}"
+        counter = 0
+        final_filename = f"{base_filename}{ext}"
+        while (member_dir / final_filename).exists():
+            counter += 1
+            final_filename = f"{base_filename}_{counter}{ext}"
+            
+        # Write file to the folder
+        (member_dir / final_filename).write_bytes(data)
+        
+        # Save relative stored name path
+        stored_name = f"{sanitized_person_name}/{final_filename}"
+        
+        # 4. Construct extraction response structure (pre-match test types)
+        types = _test_types(conn)
+        items = []
+        for r in parsed.get("results", []):
+            name = r.get("test_name")
+            value, parsed_qual = parse_value(r.get("value"))
+            qualifier = r.get("qualifier") or parsed_qual
+            if qualifier not in ("<", ">"):
+                qualifier = None
+            unit = (r.get("unit") or "").strip()
+            value_text = (r.get("value_text") or "").strip() or None
+            is_qual = value is None and value_text is not None
+            if (value is None and value_text is None) or not name or not str(name).strip():
+                continue
+            ref_low = to_number(r.get("ref_low"))
+            ref_high = to_number(r.get("ref_high"))
+            tt = match_test_type(name, types)
+            canonical = None
+            if tt and not is_qual:
+                canonical = to_canonical(value, unit, tt["canonical_unit"], tt["conversions"])
+            match_ok = tt is not None and (is_qual or canonical is not None)
+            items.append(
+                {
+                    "test_name": name,
+                    "value": value,
+                    "value_text": value_text,
+                    "qualifier": qualifier,
+                    "unit": unit,
+                    "ref_low": ref_low,
+                    "ref_high": ref_high,
+                    "flag": r.get("flag"),
+                    "matched_test_type_id": tt["id"] if match_ok else None,
+                    "matched_name": tt["name"] if match_ok else None,
+                    "canonical_unit": tt["canonical_unit"] if match_ok else None,
+                    "value_canonical": canonical if match_ok else None,
+                    "unit_known": match_ok,
+                }
+            )
+            
+        extraction_res = {
+            "document_id": None,
+            "report_date": report_date,
+            "lab_name": lab_name,
+            "patient_name": patient_name,
+            "provider": provider,
+            "model": model,
+            "items": items,
+        }
+        
+        # Insert into documents table
         cur = conn.execute(
-            "INSERT INTO documents (member_id, filename, stored_name, mime, size) VALUES (?, ?, ?, ?, ?)",
-            (member_id, file.filename, stored, mime, len(data)),
+            """INSERT INTO documents (member_id, filename, stored_name, mime, size, report_date, lab_name, status, extraction)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'extracted', ?)""",
+            (member_id, file.filename, stored_name, mime, len(data), report_date, lab_name, json.dumps(extraction_res)),
         )
+        doc_id = cur.lastrowid
+        
+        # Update extraction payload with real document ID
+        extraction_res["document_id"] = doc_id
+        conn.execute("UPDATE documents SET extraction = ? WHERE id = ?", (json.dumps(extraction_res), doc_id))
         conn.commit()
-        row = conn.execute("SELECT * FROM documents WHERE id = ?", (cur.lastrowid,)).fetchone()
+        
+        row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
         return dict(row)
     finally:
         conn.close()
@@ -551,6 +689,12 @@ def extract_document(doc_id: int, req: ExtractReq):
         row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
         if not row:
             raise HTTPException(404, "Not found")
+
+        if row["extraction"]:
+            # If already extracted during upload, return the cached extraction response
+            return json.loads(row["extraction"])
+
+        # Fallback for legacy documents uploaded before this update
         data = (FILES_DIR / row["stored_name"]).read_bytes()
         provider, model, key = _ai_config(conn, req.provider, req.model)
         try:
@@ -562,19 +706,13 @@ def extract_document(doc_id: int, req: ExtractReq):
         items = []
         for r in parsed.get("results", []):
             name = r.get("test_name")
-            # Keep any "<"/">" the lab printed: a non-detect is not a measurement.
-            # Prefer the model's explicit qualifier, else recover one from a value
-            # that arrived as "<0.01" despite the schema asking for a number.
             value, parsed_qual = parse_value(r.get("value"))
             qualifier = r.get("qualifier") or parsed_qual
             if qualifier not in ("<", ">"):
                 qualifier = None
             unit = (r.get("unit") or "").strip()
             value_text = (r.get("value_text") or "").strip() or None
-            # A qualitative result ("Negative", "B+") carries text instead of a
-            # number — it's still a result worth keeping.
             is_qual = value is None and value_text is not None
-            # Only a row with neither a number nor text is unusable.
             if (value is None and value_text is None) or not name or not str(name).strip():
                 continue
             ref_low = to_number(r.get("ref_low"))
@@ -583,12 +721,6 @@ def extract_document(doc_id: int, req: ExtractReq):
             canonical = None
             if tt and not is_qual:
                 canonical = to_canonical(value, unit, tt["canonical_unit"], tt["conversions"])
-            # Only pre-select a merge when the extracted unit actually converts into
-            # the matched type. Otherwise a fuzzy name match (e.g. "Cholesterol/HDL
-            # Ratio" → "HDL Cholesterol", unit "Ratio") would pair an incompatible
-            # unit and fail on save. Those rows default to "track as new" instead.
-            # A qualitative row has no unit to reconcile, so a name match is enough
-            # (and is what stops re-imports creating a duplicate test type).
             match_ok = tt is not None and (is_qual or canonical is not None)
             items.append(
                 {
@@ -618,8 +750,6 @@ def extract_document(doc_id: int, req: ExtractReq):
             "model": model,
             "items": items,
         }
-        # Persist the extraction so the review can be resumed later (e.g. after a
-        # reload or if the browser closed mid-review) without re-calling the AI.
         conn.execute(
             """UPDATE documents SET status = 'extracted',
                    report_date = COALESCE(?, report_date),
