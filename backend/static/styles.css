@@ -831,3 +831,32 @@ textarea { resize: vertical; }
   background: var(--good-soft);
 }
 
+/* ---------- Interactive Chart Tooltips ---------- */
+.pt-group {
+  cursor: pointer;
+}
+.chart-tooltip {
+  visibility: hidden;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  pointer-events: none;
+}
+.trend-svg.has-tooltips .pt-group:hover .chart-tooltip {
+  visibility: visible;
+  opacity: 1;
+  transform: translateY(0);
+}
+.tooltip-bg {
+  fill: var(--surface);
+  stroke: var(--border);
+  stroke-width: 1.5;
+  filter: drop-shadow(0 2px 4px rgba(0,0,0,0.15));
+}
+.tooltip-text {
+  font-size: 11px;
+  fill: var(--text-primary);
+  font-weight: bold;
+  font-family: var(--sans-display);
+}
+

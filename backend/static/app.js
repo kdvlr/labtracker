@@ -315,7 +315,7 @@ function trendChart(points, opts) {
   const ys = (v) => m.t + ih - ((v - lo) / span) * ih;
   const clampY = (y) => Math.max(m.t, Math.min(m.t + ih, y));
 
-  const svg = svgNode("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, style: "max-width:100%;height:auto;display:block" });
+  const svg = svgNode("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: "trend-svg" + (points.length > 4 ? " has-tooltips" : ""), style: "max-width:100%;height:auto;display:block" });
 
   // Zone bands — the same green / amber / red story as the range bar.
   if (dz) {
@@ -372,19 +372,59 @@ function trendChart(points, opts) {
     const isLast = i === points.length - 1;
     const cx = xs(times[i]), cy = ys(vals[i]);
     const zc = dz ? zoneOf(vals[i], dz).c : "green";
-    if (isLast) svg.append(svgNode("circle", { cx, cy, r: 11, class: "pt-halo " + zc }));
+    
+    // Create group for circle and interactive tooltip
+    const ptGroup = svgNode("g", { class: "pt-group" });
+    
+    if (isLast) ptGroup.append(svgNode("circle", { cx, cy, r: 11, class: "pt-halo " + zc }));
+    
     const c = svgNode("circle", { cx, cy, r: isLast ? 6 : 4, class: "pt " + zc + (isLast ? " latest" : "") });
     const title = svgNode("title");
     title.textContent = `${fmtDate(p.taken_at)}: ${fmtVal(conv(p.value_canonical), p.qualifier)} ${opts.unit}`
       + (dz ? ` — ${zoneOf(vals[i], dz).label}` : "")
       + `\nreported: ${fmtVal(p.value, p.qualifier)} ${p.unit}`;
     c.append(title);
-    svg.append(c);
-    // Label the current reading so you never have to hunt for "where am I now".
-    if (isLast) {
-      const lx = Math.min(cx + 12, W - 4);
+    ptGroup.append(c);
+    
+    // Interactive tooltip popup inside the group
+    const valStr = `${fmtVal(conv(p.value_canonical), p.qualifier)}${opts.unit ? " " + opts.unit : ""}`;
+    const textLen = valStr.length;
+    const rectW = Math.max(64, textLen * 7.5 + 12);
+    const rectH = 22;
+    const r = 4;
+    const aw = 10;
+    const ah = 4;
+    const y0 = cy - 31;
+    const xLeft = cx - rectW / 2;
+    const xRight = cx + rectW / 2;
+    
+    const dPath = `M ${(xLeft + r).toFixed(1)} ${y0.toFixed(1)} ` +
+                  `H ${(xRight - r).toFixed(1)} ` +
+                  `A ${r} ${r} 0 0 1 ${xRight.toFixed(1)} ${(y0 + r).toFixed(1)} ` +
+                  `V ${(y0 + rectH - r).toFixed(1)} ` +
+                  `A ${r} ${r} 0 0 1 ${(xRight - r).toFixed(1)} ${(y0 + rectH).toFixed(1)} ` +
+                  `H ${(cx + aw / 2).toFixed(1)} ` +
+                  `L ${cx.toFixed(1)} ${(y0 + rectH + ah).toFixed(1)} ` +
+                  `L ${(cx - aw / 2).toFixed(1)} ${(y0 + rectH).toFixed(1)} ` +
+                  `H ${(xLeft + r).toFixed(1)} ` +
+                  `A ${r} ${r} 0 0 1 ${xLeft.toFixed(1)} ${(y0 + rectH - r).toFixed(1)} ` +
+                  `V ${(y0 + r).toFixed(1)} ` +
+                  `A ${r} ${r} 0 0 1 ${(xLeft + r).toFixed(1)} ${y0.toFixed(1)} Z`;
+                  
+    const tooltipGroup = svgNode("g", { class: "chart-tooltip" });
+    const bg = svgNode("path", { d: dPath, class: "tooltip-bg" });
+    const txt = svgNode("text", { x: cx, y: y0 + 15, "text-anchor": "middle", class: "tooltip-text" });
+    txt.textContent = valStr;
+    tooltipGroup.append(bg, txt);
+    ptGroup.append(tooltipGroup);
+    
+    svg.append(ptGroup);
+    
+    // Label the readings statically if there are 4 or fewer points.
+    if (points.length <= 4) {
+      const lx = cx > m.l + iw - 40 ? cx - 12 : cx + 12;
       const lbl = svgNode("text", { x: lx, y: cy - 12, "text-anchor": cx > m.l + iw - 40 ? "end" : "start", class: "pt-label " + zc });
-      lbl.textContent = `${fmtVal(conv(p.value_canonical), p.qualifier)}${opts.unit ? " " + opts.unit : ""}`;
+      lbl.textContent = valStr;
       svg.append(lbl);
     }
   });
