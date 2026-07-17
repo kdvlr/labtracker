@@ -463,18 +463,7 @@ def describe_test_type(tt_id: int, request: Request, member_id: Optional[int] = 
                 )
 
         if member_id is not None and member_context:
-            system_prompt = (
-                "You are an expert clinical reference assistant explaining lab test results for a family member. "
-                "You must return ONLY a valid JSON object matching this schema:\n"
-                "{\n"
-                "  \"description\": \"Personalized description of what this biomarker measures and why it matters.\",\n"
-                "  \"high\": \"Personalized clinical ramifications and details of a high level.\",\n"
-                "  \"low\": \"Personalized clinical ramifications and details of a low level.\",\n"
-                "  \"age_related\": \"Observations or considerations relevant to a patient of this age.\",\n"
-                "  \"related_tests\": \"How to interpret this result in conjunction with related panel tests.\"\n"
-                "}\n"
-                "Do not include any prose outside the JSON object. Do not include markdown fences."
-            )
+            system_prompt = _get_setting(conn, "prompt_biomarker_personalized", ai.BIOMARKER_PERSONALIZED_SYSTEM)
             prompt = (
                 f"{member_context}\n"
                 f"Biomarker: {row['name']}" + (f" (measured in {row['canonical_unit']})" if row['canonical_unit'] else "") + ".\n"
@@ -538,18 +527,7 @@ def describe_test_type(tt_id: int, request: Request, member_id: Optional[int] = 
                         "related_tests": "See related tests."
                     }, "cached": True}
             
-            system_prompt = (
-                "You are an expert clinical reference assistant explaining lab test results. "
-                "You must return ONLY a valid JSON object matching this schema:\n"
-                "{\n"
-                "  \"description\": \"Description of what this biomarker measures and why it matters.\",\n"
-                "  \"high\": \"Clinical ramifications and details of a high level.\",\n"
-                "  \"low\": \"Clinical ramifications and details of a low level.\",\n"
-                "  \"age_related\": \"General observations or considerations relevant by age.\",\n"
-                "  \"related_tests\": \"How this tracks with other biomarkers in the same panel.\"\n"
-                "}\n"
-                "Do not include any prose outside the JSON object. Do not include markdown fences."
-            )
+            system_prompt = _get_setting(conn, "prompt_biomarker_standard", ai.BIOMARKER_STANDARD_SYSTEM)
             prompt = f"Biomarker: {row['name']}" + (f" (measured in {row['canonical_unit']})" if row["canonical_unit"] else "") + "."
             try:
                 import json
@@ -628,8 +606,9 @@ async def upload_document(
         member_dir.mkdir(parents=True, exist_ok=True)
 
         provider, model, key = _ai_config(conn)
+        extraction_sys = _get_setting(conn, "prompt_extraction_system", ai.EXTRACTION_SYSTEM)
         try:
-            parsed = ai.extract(provider, model, key, data, mime)
+            parsed = ai.extract(provider, model, key, data, mime, system_prompt=extraction_sys)
         except Exception as e:
             error_msg = f"AI extraction failed: {str(e)}"
             temp_filename = f"{sanitized_person_name}_Failed_{uuid.uuid4().hex[:8]}{ext}"
@@ -877,8 +856,9 @@ def extract_document(doc_id: int, req: ExtractReq, request: Request):
         # Fallback for legacy documents uploaded before this update
         data = (FILES_DIR / row["stored_name"]).read_bytes()
         provider, model, key = _ai_config(conn, req.provider, req.model)
+        extraction_sys = _get_setting(conn, "prompt_extraction_system", ai.EXTRACTION_SYSTEM)
         try:
-            parsed = ai.extract(provider, model, key, data, row["mime"])
+            parsed = ai.extract(provider, model, key, data, row["mime"], system_prompt=extraction_sys)
         except ai.AIError as e:
             raise HTTPException(400, str(e))
 
@@ -1278,6 +1258,10 @@ class SettingsIn(BaseModel):
     ai_model_anthropic: Optional[str] = None
     ai_model_openai: Optional[str] = None
     ai_model_gemini: Optional[str] = None
+    prompt_extraction_system: Optional[str] = None
+    prompt_qa_system: Optional[str] = None
+    prompt_biomarker_personalized: Optional[str] = None
+    prompt_biomarker_standard: Optional[str] = None
 
 
 @app.get("/api/settings")
@@ -1291,6 +1275,12 @@ def get_settings(request: Request):
         for p in ("anthropic", "openai", "gemini"):
             k = f"ai_key_{p}"
             out[f"has_key_{p}"] = bool(out.pop(k, None))
+        
+        # default prompts fallback if not configured in settings
+        out.setdefault("prompt_extraction_system", ai.EXTRACTION_SYSTEM)
+        out.setdefault("prompt_qa_system", ai.QA_SYSTEM)
+        out.setdefault("prompt_biomarker_personalized", ai.BIOMARKER_PERSONALIZED_SYSTEM)
+        out.setdefault("prompt_biomarker_standard", ai.BIOMARKER_STANDARD_SYSTEM)
         
         # Add commit SHA
         import os
@@ -1384,8 +1374,9 @@ def ask(req: AskReq, request: Request):
         history = "\n".join(lines)
         prompt = f"Historical lab data:\n{history}\n\nQuestion: {req.question}"
         provider, model, key = _ai_config(conn, req.provider, req.model)
+        qa_sys = _get_setting(conn, "prompt_qa_system", ai.QA_SYSTEM)
         try:
-            answer = ai.chat(provider, model, key, ai.QA_SYSTEM, prompt)
+            answer = ai.chat(provider, model, key, qa_sys, prompt)
         except ai.AIError as e:
             raise HTTPException(400, str(e))
         return {"answer": answer, "provider": provider, "model": model, "context": history}

@@ -2210,7 +2210,39 @@ async function renderSettings(main) {
     );
   }
 
+  const promptsFields = {};
+  const mkPrompt = (label, key, value) => {
+    const ta = el("textarea", { 
+      style: "width: 100%; height: 160px; font-family: monospace; font-size: 13px; line-height: 1.5; background: var(--panel-2);", 
+      placeholder: "System prompt..." 
+    });
+    ta.value = value || "";
+    promptsFields[key] = ta;
+    return el("div", { class: "field", style: "margin-bottom:16px;" }, [
+      el("label", { style: "margin-bottom:6px; font-weight:700;" }, label), 
+      ta
+    ]);
+  };
+
+  const promptsCard = el("div", { class: "card", style: "max-width:560px; margin-top:20px" }, [
+    el("h3", { style: "margin-top:0; margin-bottom:16px;" }, "AI System Prompts"),
+    mkPrompt("Document Extraction Prompt", "prompt_extraction_system", s.prompt_extraction_system),
+    mkPrompt("AI Q&A Assistant Prompt", "prompt_qa_system", s.prompt_qa_system),
+    mkPrompt("Biomarker Explanation (Personalized)", "prompt_biomarker_personalized", s.prompt_biomarker_personalized),
+    mkPrompt("Biomarker Explanation (Standard)", "prompt_biomarker_standard", s.prompt_biomarker_standard),
+    el("button", { class: "btn btn-primary", style: "margin-top:8px", onclick: async () => {
+      const body = {};
+      for (const [k, ta] of Object.entries(promptsFields)) {
+        body[k] = ta.value;
+      }
+      await api("/settings", { method: "PUT", body });
+      toast("AI Prompts saved");
+      render();
+    } }, "Save prompts"),
+  ]);
+
   main.append(card);
+  main.append(promptsCard);
   main.append(await renderPrivacyCard());
 
   // PWA Add to Home Screen card
