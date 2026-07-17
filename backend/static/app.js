@@ -1754,6 +1754,24 @@ async function renderSettings(main) {
   }
 
   main.append(card);
+
+  // PWA Add to Home Screen card
+  if (window.deferredPrompt) {
+    const installCard = el("div", { class: "card", style: "max-width:560px; margin-top:20px; border-left:5px solid var(--accent); background:var(--accent-soft)" }, [
+      el("div", { class: "hh-name" }, "✨ Install LabTracker App"),
+      el("p", { class: "desc-text", style: "margin:8px 0 16px; color:var(--text-secondary); font-size:15px;" }, "Install this application on your device for fast access directly from your home screen and improved offline support."),
+      el("button", { class: "btn btn-primary", onclick: async () => {
+        const promptEvent = window.deferredPrompt;
+        if (!promptEvent) return;
+        promptEvent.prompt();
+        const { outcome } = await promptEvent.userChoice;
+        console.log(`User response to the install prompt: ${outcome}`);
+        window.deferredPrompt = null;
+        render();
+      } }, "Add to Home Screen"),
+    ]);
+    main.append(installCard);
+  }
 }
 
 
@@ -1831,6 +1849,31 @@ $("#add-member").addEventListener("click", openAddMember);
 const brand = document.querySelector(".brand");
 if (brand) {
   brand.addEventListener("click", () => { navigateTo("household"); });
+}
+
+// PWA Install Prompts
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  window.deferredPrompt = e;
+  if (state.view === "settings") {
+    render();
+  }
+});
+window.addEventListener("appinstalled", () => {
+  window.deferredPrompt = null;
+  toast("LabTracker added to Home Screen successfully!");
+  if (state.view === "settings") {
+    render();
+  }
+});
+
+// Service Worker Registration
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js")
+      .then((reg) => console.log("ServiceWorker registered: ", reg.scope))
+      .catch((err) => console.error("ServiceWorker registration failed: ", err));
+  });
 }
 
 loadCore().then(render).catch((e) => {
