@@ -187,6 +187,9 @@ function toast(msg) {
 // Charts render into an SVG viewBox; on a phone that box is scaled down, so the
 // chart picks a narrower geometry rather than shrinking its own labels.
 const isNarrow = () => window.matchMedia("(max-width: 860px)").matches;
+// iPadOS reports as "MacIntel" but is touch-only, unlike a real Mac.
+const isIOS = () => /iP(hone|od|ad)/.test(navigator.platform)
+  || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 
 const fmtNum = (n) => (n == null ? "—" : Number(n).toLocaleString(undefined, { maximumFractionDigits: 3 }));
 // A non-detect ("<0.01") must never render as a bare measurement — keep the
@@ -498,22 +501,36 @@ function renderSidebar() {
 // — never shown on a fresh install, so a device that will never unlock (a
 // parent's phone) sees nothing extra at all until the day someone sets one up,
 // and even then it's a one-line "Unlock" toggle, not a login wall.
-function renderLockChip() {
-  let chip = document.getElementById("lock-chip");
-  if (!state.access.has_pin) { chip?.remove(); return; }
-  if (!chip) {
-    chip = el("button", { id: "lock-chip", class: "lock-chip" });
-    document.body.append(chip);
+function renderLockBtn() {
+  const btn = document.getElementById("sidebar-lock-btn");
+  if (!btn) return;
+  
+  if (!state.access.has_pin) {
+    btn.style.setProperty("display", "none", "important");
+    return;
   }
+  
+  btn.style.removeProperty("display");
   const locked = !state.access.unlocked;
-  chip.className = "lock-chip" + (locked ? "" : " on");
-  chip.textContent = locked ? "🔒 Unlock" : "🔓 Lock";
-  chip.onclick = locked ? openUnlockModal : lockDevice;
+  
+  btn.innerHTML = "";
+  const icoSpan = el("span", { class: "ico" }, locked ? "🔒" : "🔓");
+  const textNode = document.createTextNode(locked ? " Unlock" : " Lock");
+  btn.append(icoSpan, textNode);
+  
+  btn.onclick = (e) => {
+    e.preventDefault();
+    if (locked) {
+      openUnlockModal();
+    } else {
+      lockDevice();
+    }
+  };
 }
 
 function render() {
   renderSidebar();
-  renderLockChip();
+  renderLockBtn();
   const main = $("#main");
   main.innerHTML = "";
   document.querySelectorAll(".nav-btn").forEach((b) => b.classList.remove("active"));
@@ -802,7 +819,7 @@ const BADGE_CLASS = { green: "ok", amber: "warn", red: "bad", na: "na" };
 
 // ---------------- household (everyone at a glance) ----------------
 async function renderHousehold(main) {
-  $(`[data-view="household"]`)?.classList.add("active");
+  document.querySelectorAll('[data-view="household"]').forEach((b) => b.classList.add("active"));
   main.append(el("div", { class: "page-head" }, el("div", {}, [
     el("h1", { class: "page-title" }, "Household"),
     el("p", { class: "page-sub" }, "Everyone at a glance — who needs a closer look."),
@@ -1493,7 +1510,7 @@ function unitToggle(t) {
 
 // ---------------- upload / extract / review ----------------
 function renderUpload(main) {
-  $(`[data-view="upload"]`)?.classList.add("active");
+  document.querySelectorAll('[data-view="upload"]').forEach((b) => b.classList.add("active"));
   main.append(el("div", { class: "page-head" }, el("div", {}, [
     el("h1", { class: "page-title" }, "Add results"),
     el("p", { class: "page-sub" }, "Upload a lab report for AI extraction, or type values in manually — home meter readings, paper records, values from a phone call."),
@@ -1525,9 +1542,15 @@ function renderUpload(main) {
   const status = el("div", { style: "margin-top:12px" });
   const reviewMount = el("div", { style: "margin-top:20px" });
 
+  // iOS Safari's clipboard API only ever exposes images to a web page — never
+  // a PDF or other file, regardless of which "Copy" produced it (in-chat or
+  // the system share sheet; both were tested and neither works). That's a
+  // WebKit sandboxing limit, not something fixable here, so the iOS copy is
+  // scoped to what actually works: photos and screenshots.
+  const ios = isIOS();
   const pasteInput = el("input", {
     type: "text",
-    placeholder: "Tap here to paste copied file...",
+    placeholder: ios ? "Tap here to paste a photo or screenshot…" : "Tap here to paste a copied file…",
     style: "width: 100%; padding: 12px 16px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--panel); text-align: center; font-size: 15px; font-weight: 500; caret-color: transparent;"
   });
 
@@ -1550,12 +1573,14 @@ function renderUpload(main) {
       }
     }
 
-    // 3. Fallback to async navigator.clipboard.read() if available
+    // 3. Fallback to async navigator.clipboard.read() if available. Skip the
+    // PDF search on iOS — Safari never exposes application/pdf this way, so
+    // trying just costs a clipboard-permission prompt for nothing.
     if (!file && navigator.clipboard && navigator.clipboard.read) {
       try {
         const data = await navigator.clipboard.read();
         for (const item of data) {
-          const pdfType = item.types.find(t => t === "application/pdf");
+          const pdfType = ios ? null : item.types.find(t => t === "application/pdf");
           const imgType = item.types.find(t => t.startsWith("image/"));
           const targetType = pdfType || imgType;
           if (targetType) {
@@ -1573,25 +1598,29 @@ function renderUpload(main) {
       const dt = new DataTransfer();
       dt.items.add(file);
       fileInput.files = dt.files;
-      
+
       let name = file.name || "";
       if (!name) {
         const ext = file.type.split("/")[1] || "png";
         name = `clipboard_paste_${new Date().toISOString().slice(0, 10)}.${ext}`;
       }
-      
+
       fileStatusText.textContent = `📋 Attached: ${name}`;
       pasteInput.value = `📋 Attached: ${name}`;
       toast("File pasted successfully!");
       return;
     }
 
-    let clipDesc = "";
-    if (e.clipboardData) {
-      const types = Array.from(e.clipboardData.types || []);
-      if (types.length > 0) clipDesc = ` (contains: ${types.join(", ")})`;
+    if (ios) {
+      toast("No photo found in clipboard. iOS can't paste PDFs into an app — in WhatsApp, use Share → Save to Files, then tap Browse Files above.");
+    } else {
+      let clipDesc = "";
+      if (e.clipboardData) {
+        const types = Array.from(e.clipboardData.types || []);
+        if (types.length > 0) clipDesc = ` (contains: ${types.join(", ")})`;
+      }
+      toast(`No file found in clipboard${clipDesc}.`);
     }
-    toast(`No file found in clipboard${clipDesc}. Tip: To copy a PDF from WhatsApp on iOS, open the PDF inside WhatsApp, tap the Share icon, select 'Copy' from the system share sheet, then paste it here.`);
   });
 
   fileInput.addEventListener("change", () => {
@@ -1618,9 +1647,13 @@ function renderUpload(main) {
     ]),
     el("div", { style: "text-align: center; margin: 10px 0 16px; color: var(--muted); font-size: 13.5px; font-weight: 600;" }, "— OR —"),
     el("div", { class: "field", style: "margin-bottom: 20px;" }, [
-      el("label", {}, "Paste report from clipboard (iOS/Mac/Windows)"),
-      pasteInput
-    ]),
+      el("label", {}, ios ? "Paste a photo or screenshot" : "Paste a copied file (Mac/Windows)"),
+      pasteInput,
+      // Persistent, not just a toast — a PDF sent over WhatsApp is the common
+      // case here, and this is the one instruction that matters for it.
+      ios ? el("p", { class: "modal-lead", style: "margin:8px 2px 0; font-size:13.5px" },
+        "For a PDF from WhatsApp: tap Share → Save to Files, then use Browse Files above. Pasting only works for photos on iPhone/iPad.") : null,
+    ].filter(Boolean)),
     el("button", { class: "btn btn-primary", onclick: async () => {
       if (!fileInput.files[0]) return toast("Choose or paste a file first");
       if (!memberSel.value) return toast("Add a family member first");
@@ -1898,7 +1931,7 @@ async function deleteImport(doc) {
 
 // ---------------- documents ----------------
 async function renderDocuments(main) {
-  $(`[data-view="documents"]`)?.classList.add("active");
+  document.querySelectorAll('[data-view="documents"]').forEach((b) => b.classList.add("active"));
   main.append(el("div", { class: "page-head" }, el("div", {}, [
     el("h1", { class: "page-title" }, "Documents"),
     el("p", { class: "page-sub" }, "Every uploaded report is kept locally as a backup you can reopen anytime."),
@@ -2159,7 +2192,7 @@ async function renderPrivacyCard() {
 
 // ---------------- settings ----------------
 async function renderSettings(main) {
-  $(`[data-view="settings"]`)?.classList.add("active");
+  document.querySelectorAll('[data-view="settings"]').forEach((b) => b.classList.add("active"));
   const s = await api("/settings");
   main.append(el("div", { class: "page-head" }, el("div", {}, [
     el("h1", { class: "page-title" }, "Settings"),
@@ -2332,7 +2365,7 @@ function openAddMember() {
 }
 
 // ---------------- boot ----------------
-document.querySelectorAll(".nav-btn").forEach((b) => b.addEventListener("click", () => { navigateTo(b.dataset.view); }));
+document.querySelectorAll(".nav-btn").forEach((b) => b.addEventListener("click", () => { if (b.dataset.view) navigateTo(b.dataset.view); }));
 $("#add-member").addEventListener("click", openAddMember);
 
 const brand = document.querySelector(".brand");
