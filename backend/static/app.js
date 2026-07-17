@@ -1431,31 +1431,66 @@ function renderUpload(main) {
     style: "width: 100%; padding: 12px 16px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--panel); text-align: center; font-size: 15px; font-weight: 500; caret-color: transparent;"
   });
 
-  pasteInput.addEventListener("paste", (e) => {
+  pasteInput.addEventListener("paste", async (e) => {
     e.preventDefault();
-    const items = e.clipboardData?.items;
-    if (!items) return;
-    for (const item of items) {
-      if (item.kind === "file") {
-        const file = item.getAsFile();
-        if (file) {
-          const dt = new DataTransfer();
-          dt.items.add(file);
-          fileInput.files = dt.files;
-          
-          let name = file.name || "";
-          if (!name) {
-            const ext = file.type.split("/")[1] || "png";
-            name = `clipboard_paste_${new Date().toISOString().slice(0, 10)}.${ext}`;
-          }
-          
-          pasteInput.value = `📋 Attached: ${name}`;
-          toast("File pasted successfully!");
-          return;
+    let file = null;
+
+    // 1. Check e.clipboardData.files first (standard file paste)
+    if (e.clipboardData?.files && e.clipboardData.files.length > 0) {
+      file = e.clipboardData.files[0];
+    }
+
+    // 2. Fallback to e.clipboardData.items iteration
+    if (!file && e.clipboardData?.items) {
+      for (const item of e.clipboardData.items) {
+        if (item.kind === "file") {
+          file = item.getAsFile();
+          if (file) break;
         }
       }
     }
-    toast("No image or PDF file found in clipboard");
+
+    // 3. Fallback to async navigator.clipboard.read() if available
+    if (!file && navigator.clipboard && navigator.clipboard.read) {
+      try {
+        const data = await navigator.clipboard.read();
+        for (const item of data) {
+          const pdfType = item.types.find(t => t === "application/pdf");
+          const imgType = item.types.find(t => t.startsWith("image/"));
+          const targetType = pdfType || imgType;
+          if (targetType) {
+            const blob = await item.getType(targetType);
+            file = new File([blob], `pasted_file.${targetType.split("/")[1] || "bin"}`, { type: targetType });
+            break;
+          }
+        }
+      } catch (err) {
+        console.warn("Async clipboard read failed:", err);
+      }
+    }
+
+    if (file) {
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      fileInput.files = dt.files;
+      
+      let name = file.name || "";
+      if (!name) {
+        const ext = file.type.split("/")[1] || "png";
+        name = `clipboard_paste_${new Date().toISOString().slice(0, 10)}.${ext}`;
+      }
+      
+      pasteInput.value = `📋 Attached: ${name}`;
+      toast("File pasted successfully!");
+      return;
+    }
+
+    let clipDesc = "empty or unknown format";
+    if (e.clipboardData) {
+      const types = Array.from(e.clipboardData.types || []);
+      if (types.length > 0) clipDesc = types.join(", ");
+    }
+    toast(`No file found in clipboard (contains: ${clipDesc}). Please copy the actual file or screenshot first.`);
   });
 
   fileInput.addEventListener("change", () => {
