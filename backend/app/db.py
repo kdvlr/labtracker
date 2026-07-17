@@ -10,6 +10,7 @@ _SCHEMA = (Path(__file__).parent / "schema.sql").read_text()
 def get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
@@ -64,6 +65,8 @@ def init_db() -> None:
         dcols = {r["name"] for r in conn.execute("PRAGMA table_info(documents)")}
         if "extraction" not in dcols:
             conn.execute("ALTER TABLE documents ADD COLUMN extraction TEXT")
+            
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_member ON documents(member_id)")
 
         n = conn.execute("SELECT COUNT(*) FROM test_types").fetchone()[0]
         if n == 0:

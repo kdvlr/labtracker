@@ -484,13 +484,7 @@ def describe_test_type(tt_id: int, request: Request, member_id: Optional[int] = 
             try:
                 import json
                 text = ai.chat(provider, model, key, system_prompt, prompt).strip()
-                if text.startswith("```"):
-                    lines = text.split("\n")
-                    if lines[0].startswith("```json"):
-                        text = "\n".join(lines[1:-1])
-                    elif lines[0].startswith("```"):
-                        text = "\n".join(lines[1:-1])
-                parsed = json.loads(text)
+                parsed = ai._extract_json(text)
             except Exception as e:
                 parsed = {
                     "description": text,
@@ -537,13 +531,7 @@ def describe_test_type(tt_id: int, request: Request, member_id: Optional[int] = 
             try:
                 import json
                 text = ai.chat(provider, model, key, system_prompt, prompt).strip()
-                if text.startswith("```"):
-                    lines = text.split("\n")
-                    if lines[0].startswith("```json"):
-                        text = "\n".join(lines[1:-1])
-                    elif lines[0].startswith("```"):
-                        text = "\n".join(lines[1:-1])
-                parsed = json.loads(text)
+                parsed = ai._extract_json(text)
             except Exception as e:
                 parsed = {
                     "description": text,
@@ -1749,7 +1737,7 @@ def ask(req: AskReq, request: Request):
             if not tt:
                 continue
             rows = conn.execute(
-                """SELECT taken_at, value, unit, value_canonical, flag FROM results
+                """SELECT taken_at, value, unit, value_canonical, value_text, flag FROM results
                    WHERE member_id = ? AND test_type_id = ? ORDER BY taken_at""",
                 (req.member_id, ttid),
             ).fetchall()
@@ -1760,11 +1748,15 @@ def ask(req: AskReq, request: Request):
                 ref.append(f"high {tt['ref_high']}")
             lines.append(f"\n## {tt['name']} (canonical unit {tt['canonical_unit']}; reference {', '.join(ref) or 'n/a'})")
             for r in rows:
-                orig = f"{r['value']} {r['unit']}"
-                canon = f"{round(r['value_canonical'], 3)} {tt['canonical_unit']}"
-                flag = f" [{r['flag']}]" if r["flag"] else ""
-                extra = f" (reported as {orig})" if orig.replace(" ", "") != canon.replace(" ", "") else ""
-                lines.append(f"- {r['taken_at']}: {canon}{flag}{extra}")
+                if r['value_canonical'] is not None:
+                    orig = f"{r['value']} {r['unit']}"
+                    canon = f"{round(r['value_canonical'], 3)} {tt['canonical_unit']}"
+                    flag = f" [{r['flag']}]" if r["flag"] else ""
+                    extra = f" (reported as {orig})" if orig.replace(" ", "") != canon.replace(" ", "") else ""
+                    lines.append(f"- {r['taken_at']}: {canon}{flag}{extra}")
+                else:
+                    flag = f" [{r['flag']}]" if r["flag"] else ""
+                    lines.append(f"- {r['taken_at']}: {r['value_text'] or r['value']}{flag}")
         history = "\n".join(lines)
         prompt = f"Historical lab data:\n{history}\n\nQuestion: {req.question}"
         provider, model, key = _ai_config(conn, req.provider, req.model)
