@@ -221,6 +221,34 @@ body {
 .pill-ok { background: var(--good-soft); color: var(--good); }
 .spark { margin-top: 12px; display: block; }
 
+/* ---------- household ---------- */
+.household-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 18px; }
+.hh-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-sm); padding: 16px 18px; }
+.hh-head { display: flex; align-items: center; gap: 11px; cursor: pointer; margin: -4px -6px 12px; padding: 6px; border-radius: var(--radius-sm); transition: background 0.12s ease; }
+.hh-head:hover { background: var(--panel-2); }
+.hh-head:hover .row-chev { color: var(--accent); opacity: 1; }
+.hh-name { font-weight: 700; font-size: 16px; letter-spacing: -0.01em; }
+.hh-meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.hh-pills { display: flex; gap: 7px; flex-wrap: wrap; margin-bottom: 12px; }
+.hh-empty, .hh-allclear { color: var(--muted); font-size: 13px; padding: 6px 2px; }
+.hh-allclear { color: var(--good); font-weight: 600; }
+.hh-list { display: flex; flex-direction: column; gap: 1px; }
+.hh-item {
+  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+  padding: 7px 8px; border: none; background: none; border-radius: 8px;
+  font: inherit; font-size: 13.5px; color: var(--text-primary); cursor: pointer;
+  transition: background 0.1s ease;
+}
+.hh-item:hover { background: var(--panel-2); }
+.hh-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.hh-dot.red { background: var(--high); }
+.hh-dot.amber { background: var(--low); }
+.hh-item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hh-item-val { font-variant-numeric: tabular-nums; font-weight: 650; font-size: 13px; white-space: nowrap; flex: none; }
+.hh-item-val.red { color: var(--high); }
+.hh-item-val.amber { color: var(--low); }
+.hh-more { color: var(--muted); font-size: 12px; padding: 6px 8px 2px; }
+
 /* ---------- overall status filter — same pill UI as category indicators ---------- */
 .status-summary { display: flex; gap: 10px; margin: 0 0 20px; flex-wrap: wrap; }
 .filter-pill {
@@ -405,15 +433,38 @@ textarea { resize: vertical; }
 
 /* charts */
 .tick { fill: var(--muted); font-size: 11px; }
+.axis-unit { font-size: 10.5px; font-weight: 600; letter-spacing: 0.02em; }
 .axis-line { stroke: var(--baseline); stroke-width: 1; }
 .grid-line { stroke: var(--grid); stroke-width: 1; }
+
+/* shared reference band — used by the family comparison chart, where members
+   have different sex/age ranges so a single per-member zone map doesn't apply */
 .ref-band { fill: var(--good); opacity: 0.08; }
 .ref-line { stroke: var(--good); stroke-width: 1; stroke-dasharray: 4 4; opacity: 0.5; }
-.series-line { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
-.series-area { fill: url(#areaGrad); opacity: 0.5; }
-.pt { fill: var(--accent); stroke: var(--panel); stroke-width: 2.5; }
-.pt-H { fill: var(--high); }
-.pt-L { fill: var(--low); }
+
+/* zone bands — same green / amber / red story as the range bar */
+.zband.green { fill: var(--range-in); opacity: 0.16; }
+.zband.amber { fill: var(--range-warn); opacity: 0.55; }
+.zband.red { fill: var(--range-out); opacity: 0.55; }
+.zbound { stroke: var(--baseline); stroke-width: 1; stroke-dasharray: 4 4; opacity: 0.6; }
+
+.series-line { fill: none; stroke: var(--text-secondary); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.series-line.dotted { stroke-dasharray: 2 5; opacity: 0.85; }
+
+/* readings, coloured by the band they land in; the latest one is emphasised */
+.pt { stroke: var(--panel); stroke-width: 2; }
+.pt.green { fill: var(--range-in); }
+.pt.amber { fill: var(--low); }
+.pt.red { fill: var(--high); }
+.pt.latest { stroke-width: 2.5; }
+.pt-halo { fill: none; stroke-width: 2; opacity: 0.35; }
+.pt-halo.green { stroke: var(--range-in); }
+.pt-halo.amber { stroke: var(--low); }
+.pt-halo.red { stroke: var(--high); }
+.pt-label { font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.pt-label.green { fill: var(--good); }
+.pt-label.amber { fill: var(--low); }
+.pt-label.red { fill: var(--high); }
 
 /* ---------- pending-review banner ---------- */
 .banner {
