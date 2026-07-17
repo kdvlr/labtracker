@@ -3,7 +3,7 @@ const state = {
   members: [],
   testTypes: [],
   activeMember: null,
-  view: "overview",
+  view: "household",
   search: "",
   collapsed: {},
   statusFilter: null,
