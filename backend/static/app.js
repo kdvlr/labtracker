@@ -747,7 +747,7 @@ async function renderDetail(main) {
     api(`/members/${member.id}/summary`),
   ]);
   state._detail.unit = state._detail.unit || t.canonical_unit;
-  state._detail.tab = state._detail.tab || "results";
+  state._detail.tab = state._detail.tab || "description";
 
   main.append(el("div", { class: "detail-head" }, [
     el("button", { class: "back", onclick: () => { navigateBack(); } }, "← Back"),
