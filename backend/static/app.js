@@ -10,13 +10,115 @@ const state = {
   access: { has_pin: false, unlocked: false },
 };
 
-state.history = [];
+state.pushCount = 0;
 
 function isViewPrivate(view, activeMemberId) {
   if (view === "settings" && state.access.has_pin) return true;
   if (!activeMemberId) return false;
   const m = state.members.find(x => x.id === activeMemberId);
   return m ? !!m.private : false;
+}
+
+function getHashForState(s) {
+  if (s.view === "household") return "#/household";
+  if (s.view === "overview") return `#/overview?member=${s.activeMember}`;
+  if (s.view === "detail") return `#/detail?member=${s.activeMember}&test_type=${s._detail?.id}`;
+  if (s.view === "upload") return `#/upload?member=${s.activeMember}`;
+  if (s.view === "documents") return "#/documents";
+  if (s.view === "review-doc") return `#/review-doc?doc=${s._reviewDoc?.id}`;
+  if (s.view === "settings") return "#/settings";
+  if (s.view === "report") return `#/report?member=${s._report?.member?.id}`;
+  return "#/household";
+}
+
+function getStateSnapshot() {
+  return {
+    view: state.view,
+    activeMember: state.activeMember,
+    search: state.search,
+    statusFilter: state.statusFilter,
+    _detail: state._detail ? { ...state._detail } : null,
+    _doc: state._doc ? { ...state._doc } : null,
+    _reviewDoc: state._reviewDoc ? { ...state._reviewDoc } : null,
+    _report: state._report ? { ...state._report } : null
+  };
+}
+
+let isPopStateNavigation = false;
+
+window.addEventListener("popstate", async (e) => {
+  if (!e.state) return;
+  isPopStateNavigation = true;
+  try {
+    const targetState = e.state;
+    const currentMemberId = state.activeMember;
+    const currentPrivate = isViewPrivate(state.view, currentMemberId);
+    const targetPrivate = isViewPrivate(targetState.view, targetState.activeMember);
+
+    // If target view is private and we are locked, prompt for PIN first!
+    if (state.access.has_pin && !state.access.unlocked && targetPrivate) {
+      openUnlockModal(
+        async () => {
+          Object.assign(state, targetState);
+          render();
+        },
+        () => {
+          // Cancelled: go back to prevent seeing private view
+          history.back();
+        }
+      );
+      return;
+    }
+
+    if (state.access.unlocked && currentPrivate && !targetPrivate) {
+      api("/lock", { method: "POST" }).catch(() => {});
+      setUnlockToken(null);
+      state.access.unlocked = false;
+      await loadCore();
+    }
+
+    Object.assign(state, targetState);
+    render();
+  } finally {
+    isPopStateNavigation = false;
+  }
+});
+
+function handleInitialHash() {
+  const hash = window.location.hash;
+  if (!hash) {
+    history.replaceState(getStateSnapshot(), "", "#/household");
+    return;
+  }
+  
+  const parts = hash.split("?");
+  const route = parts[0];
+  const params = new URLSearchParams(parts[1] || "");
+  
+  const view = route.replace("#/", "");
+  const extras = {};
+  
+  if (view === "overview") {
+    extras.activeMember = parseInt(params.get("member")) || null;
+  } else if (view === "detail") {
+    extras.activeMember = parseInt(params.get("member")) || null;
+    const ttId = parseInt(params.get("test_type"));
+    if (ttId) {
+      extras._detail = state.testTypes.find(t => t.id === ttId) || null;
+    }
+  } else if (view === "upload") {
+    extras.activeMember = parseInt(params.get("member")) || null;
+  } else if (view === "review-doc") {
+    const docId = parseInt(params.get("doc"));
+    extras._reviewDoc = { id: docId };
+  } else if (view === "report") {
+    const memberId = parseInt(params.get("member"));
+    extras._report = { member: state.members.find(m => m.id === memberId) || null };
+  }
+  
+  state.view = view;
+  Object.assign(state, extras);
+  history.replaceState(getStateSnapshot(), "", hash);
 }
 
 function navigateTo(view, extras = {}) {
@@ -32,8 +134,6 @@ function navigateTo(view, extras = {}) {
   if (state.access.has_pin && !state.access.unlocked && targetPrivate) {
     openUnlockModal(
       async () => {
-        // Once unlocked, state.members will be reloaded and contain the private member.
-        // We can now safely navigate.
         navigateTo(view, extras);
       },
       () => {
@@ -47,11 +147,9 @@ function navigateTo(view, extras = {}) {
   const currentMemberId = state.activeMember;
   const currentPrivate = isViewPrivate(state.view, currentMemberId);
   if (state.access.unlocked && currentPrivate && !targetPrivate) {
-    // Navigating away from a private view to a public view -> Lock!
     api("/lock", { method: "POST" }).catch(() => {});
     setUnlockToken(null);
     state.access.unlocked = false;
-    // Reload core to update member list (hiding private ones)
     loadCore().then(() => {
       performNavigation(view, extras);
     });
@@ -62,79 +160,31 @@ function navigateTo(view, extras = {}) {
 }
 
 function performNavigation(view, extras) {
-  const entry = {
-    view: state.view,
-    activeMember: state.activeMember,
-    search: state.search,
-    statusFilter: state.statusFilter,
-    _detail: state._detail ? { ...state._detail } : null,
-    _doc: state._doc ? { ...state._doc } : null,
-    _reviewDoc: state._reviewDoc ? { ...state._reviewDoc } : null,
-    _report: state._report ? { ...state._report } : null
-  };
-  
-  state.history.push(entry);
-  
   state.view = view;
   Object.assign(state, extras);
+  
+  if (!isPopStateNavigation) {
+    const hash = getHashForState(state);
+    history.pushState(getStateSnapshot(), "", hash);
+    state.pushCount = (state.pushCount || 0) + 1;
+  }
+  
   render();
 }
 
 function navigateBack() {
-  if (state.history.length > 0) {
-    const prev = state.history[state.history.length - 1]; // peek at the target
-    const currentMemberId = state.activeMember;
-    const currentPrivate = isViewPrivate(state.view, currentMemberId);
-    const targetPrivate = isViewPrivate(prev.view, prev.activeMember);
-
-    if (state.access.unlocked && currentPrivate && !targetPrivate) {
-      // Navigating back from a private view to a public view -> Lock!
-      api("/lock", { method: "POST" }).catch(() => {});
-      setUnlockToken(null);
-      state.access.unlocked = false;
-      loadCore().then(() => {
-        state.history.pop();
-        state.view = prev.view;
-        state.activeMember = prev.activeMember;
-        state.search = prev.search;
-        state.statusFilter = prev.statusFilter;
-        state._detail = prev._detail;
-        state._doc = prev._doc;
-        state._reviewDoc = prev._reviewDoc;
-        state._report = prev._report;
-        render();
-      });
-      return;
-    }
-
-    state.history.pop();
-    state.view = prev.view;
-    state.activeMember = prev.activeMember;
-    state.search = prev.search;
-    state.statusFilter = prev.statusFilter;
-    state._detail = prev._detail;
-    state._doc = prev._doc;
-    state._reviewDoc = prev._reviewDoc;
-    state._report = prev._report;
-    render();
+  if ((state.pushCount || 0) > 0) {
+    state.pushCount--;
+    history.back();
   } else {
-    const currentMemberId = state.activeMember;
-    const currentPrivate = isViewPrivate(state.view, currentMemberId);
-    const targetPrivate = false; // Household is public
-
-    if (state.access.unlocked && currentPrivate && !targetPrivate) {
-      api("/lock", { method: "POST" }).catch(() => {});
-      setUnlockToken(null);
-      state.access.unlocked = false;
-      loadCore().then(() => {
-        state.view = "household";
-        render();
-      });
-      return;
+    // Fallback if local history stack is empty (e.g. loaded direct link)
+    if (state.view === "detail") {
+      navigateTo("overview", { activeMember: state.activeMember });
+    } else if (state.view === "overview" || state.view === "documents" || state.view === "settings" || state.view === "review-doc") {
+      navigateTo("household");
+    } else {
+      navigateTo("household");
     }
-
-    state.view = "household";
-    render();
   }
 }
 
@@ -2980,6 +3030,9 @@ if ("serviceWorker" in navigator) {
   });
 }
 
-loadCore().then(render).catch((e) => {
+loadCore().then(() => {
+  handleInitialHash();
+  render();
+}).catch((e) => {
   $("#main").append(el("div", { class: "empty" }, "Failed to load: " + e.message));
 });
