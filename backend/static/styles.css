@@ -472,21 +472,8 @@ textarea { resize: vertical; }
 .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: -2px; margin-right: 6px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* Private-profile lock chip: exists only once a PIN has been set anywhere, so a
-   device that never will unlock sees nothing until that day. Deliberately a
-   quiet corner control, not a login bar. */
-.lock-chip {
-  position: fixed; top: 14px; right: 14px; z-index: 45;
-  display: inline-flex; align-items: center; gap: 6px;
-  min-height: 40px; padding: 8px 14px; border-radius: var(--radius-pill);
-  border: 1px solid var(--border); background: var(--panel); color: var(--text-secondary);
-  font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
-  box-shadow: var(--shadow-sm);
-}
-.lock-chip.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
-@media (max-width: 860px) {
-  .lock-chip { top: auto; bottom: calc(78px + env(safe-area-inset-bottom, 0px)); right: 12px; }
-}
+.desktop-only { display: flex !important; }
+.mobile-only { display: none !important; }
 
 .check-row { display: flex; align-items: center; gap: 10px; font-size: 15.5px; font-weight: 500; color: var(--text-primary); cursor: pointer; }
 .check-row input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--accent); flex: none; }
@@ -566,6 +553,8 @@ textarea { resize: vertical; }
    and brand are desktop-only chrome. */
 @media (max-width: 860px) {
   body { grid-template-columns: 1fr; }
+  .desktop-only { display: none !important; }
+  .mobile-only { display: flex !important; }
 
   .sidebar {
     position: fixed; inset: auto 0 0 0; top: auto;
