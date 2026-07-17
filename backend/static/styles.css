@@ -137,6 +137,7 @@
 html, body {
   margin: 0;
   height: 100%;
+  overflow: hidden;
   font-family: var(--sans-body);
   font-size: 16px;
   line-height: 1.65;
@@ -149,7 +150,7 @@ html, body {
 body {
   display: grid;
   grid-template-columns: 280px 1fr;
-  min-height: 100vh;
+  height: 100vh;
 }
 
 /* ---------- sidebar ---------- */
@@ -163,6 +164,7 @@ body {
   position: sticky;
   top: 0;
   height: 100vh;
+  overflow-y: auto;
 }
 .brand { display: flex; align-items: center; gap: 12px; padding: 6px 12px 24px; cursor: pointer; user-select: none; }
 .brand-mark {
@@ -224,6 +226,8 @@ body {
   max-width: 1200px;
   width: 100%;
   margin: 0 auto;
+  height: 100vh;
+  overflow-y: auto;
 }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 30px; gap: 20px; flex-wrap: wrap; }
 .page-title { font-family: var(--sans-display); font-size: 34px; font-weight: 800; letter-spacing: -0.025em; margin: 0; line-height: 1.1; color: var(--accent); }
@@ -549,14 +553,15 @@ textarea { resize: vertical; }
 }
 
 @media (max-width: 860px) {
+  html, body { height: auto; overflow: visible; }
   body { grid-template-columns: 1fr; }
-  .sidebar { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px; padding: 16px 20px; }
+  .sidebar { position: static; height: auto; overflow-y: visible; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px; padding: 16px 20px; }
   .brand { padding: 0 12px 0 6px; }
   .section-caption { display: none; }
   .sidebar-footer { flex-direction: row; border: none; margin: 0 0 0 auto; padding: 0; }
   .member-nav { flex-direction: row; flex-wrap: wrap; }
   .ghost-btn { width: auto; }
-  .main { padding: 24px 20px 60px; }
+  .main { padding: 24px 20px 60px; height: auto; overflow-y: visible; }
   .page-title { font-size: 26px; }
 }
 
