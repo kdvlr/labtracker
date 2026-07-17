@@ -261,7 +261,7 @@ def describe_test_type(tt_id: int, member_id: Optional[int] = None, force_refres
                 
                 # Fetch member's latest results for this biomarker
                 latest = conn.execute(
-                    """SELECT value, unit, value_canonical, flag, taken_at 
+                    """SELECT value, unit, value_canonical, value_text, flag, taken_at 
                        FROM results 
                        WHERE member_id = ? AND test_type_id = ? 
                        ORDER BY taken_at DESC LIMIT 1""",
@@ -270,10 +270,13 @@ def describe_test_type(tt_id: int, member_id: Optional[int] = None, force_refres
                 
                 latest_str = "No results on file yet."
                 if latest:
-                    orig_val = f"{latest['value']} {latest['unit']}"
-                    canon_val = f"{round(latest['value_canonical'], 3)} {row['canonical_unit'] or ''}"
-                    flag_str = f" (Flagged as {latest['flag']})" if latest['flag'] else ""
-                    latest_str = f"Latest reading on {latest['taken_at']}: {canon_val} {flag_str} (reported as {orig_val})."
+                    if latest["value_canonical"] is not None:
+                        orig_val = f"{latest['value']} {latest['unit']}"
+                        canon_val = f"{round(latest['value_canonical'], 3)} {row['canonical_unit'] or ''}"
+                        flag_str = f" (Flagged as {latest['flag']})" if latest['flag'] else ""
+                        latest_str = f"Latest reading on {latest['taken_at']}: {canon_val} {flag_str} (reported as {orig_val})."
+                    else:
+                        latest_str = f"Latest reading on {latest['taken_at']}: {latest['value_text'] or latest['value']}."
 
                 # Fetch other test types in the same category
                 related_rows = conn.execute(
@@ -287,18 +290,22 @@ def describe_test_type(tt_id: int, member_id: Optional[int] = None, force_refres
                 related_readings = []
                 for rr in related_rows:
                     latest_rel = conn.execute(
-                        """SELECT value_canonical, flag, taken_at 
+                        """SELECT value_canonical, value_text, flag, taken_at 
                            FROM results 
                            WHERE member_id = ? AND test_type_id = ? 
                            ORDER BY taken_at DESC LIMIT 1""",
                         (member_id, rr["id"])
                     ).fetchone()
                     if latest_rel:
-                        val_str = f"{round(latest_rel['value_canonical'], 3)} {rr['canonical_unit'] or ''}"
+                        if latest_rel['value_canonical'] is not None:
+                            val_str = f"{round(latest_rel['value_canonical'], 3)} {rr['canonical_unit'] or ''}"
+                        else:
+                            val_str = str(latest_rel['value_text'] or latest_rel['value'] or '')
                         flag_str = f" ({latest_rel['flag']})" if latest_rel['flag'] else ""
                         related_readings.append(f"- {rr['name']}: {val_str}{flag_str} (taken {latest_rel['taken_at']})")
                     else:
                         related_readings.append(f"- {rr['name']}: No readings on file")
+
                 
                 related_readings_str = "\n".join(related_readings) if related_readings else "none"
 
