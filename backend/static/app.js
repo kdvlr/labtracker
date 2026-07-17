@@ -2215,7 +2215,7 @@ function renderDocList(container, docs) {
       el("th", {}, "Date : Lab"),
       el("th", {}, "Results"),
       el("th", {}, "Status"),
-      el("th", { style: "text-align: right;" }, "")
+      el("th", { style: "width: 1%; text-align: right;" }, "")
     ])));
     
     const tbody = el("tbody");
@@ -2234,7 +2234,7 @@ function renderDocList(container, docs) {
         "failed": "pill-H"
       }[d.status] || "pill-L";
       
-      const actions = el("div", { style: "display:flex; gap:6px; justify-content:flex-end; align-items:center;" }, [
+      const actions = el("div", { style: "display:flex; gap:6px; justify-content:flex-end; align-items:center; flex-wrap:nowrap;" }, [
         needsReview ? el("button", { class: "btn btn-sm btn-primary", onclick: () => openReview(d) }, "Review →") : null,
         state.members.length > 1 ? el("button", { class: "btn btn-sm", onclick: () => openReassignDoc(d) }, "Reassign") : null,
         el("a", { class: "btn btn-sm", href: `/api/documents/${d.id}/file`, target: "_blank" }, "Open File"),
@@ -2246,7 +2246,7 @@ function renderDocList(container, docs) {
         el("td", {}, `${fmtDate(d.report_date || d.created_at)} : ${d.lab_name || "Unknown Lab"}`),
         el("td", {}, `${d.result_count || 0} items`),
         el("td", {}, el("span", { class: "pill " + statusPillClass }, statusTextMap[d.status] || d.status)),
-        el("td", {}, actions)
+        el("td", { style: "width: 1%; white-space: nowrap; text-align: right;" }, actions)
       ]));
     });
     table.append(tbody);
