@@ -358,11 +358,8 @@ async function renderOverview(main) {
     ]),
   ]));
 
-  const [summary, schedules] = await Promise.all([
-    api(`/members/${member.id}/summary`),
-    api(`/members/${member.id}/schedules`),
-  ]);
-  main.append(schedulePanel(member, schedules));
+  const summary = await api(`/members/${member.id}/summary`);
+
   if (!summary.length) {
     main.append(el("div", { class: "card empty-card empty" }, [
       el("span", { class: "empty-icon" }, "🧫"),
