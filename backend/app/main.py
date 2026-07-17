@@ -740,7 +740,7 @@ async def upload_document(
         cur = conn.execute(
             """INSERT INTO documents (member_id, filename, stored_name, mime, size, report_date, lab_name, status, extraction)
                VALUES (?, ?, ?, ?, ?, ?, ?, 'needs_review', ?)""",
-            (member_id, file.filename, stored_name, mime, len(data), report_date, lab_name, json.dumps(extraction_res)),
+            (member_id, final_filename, stored_name, mime, len(data), report_date, lab_name, json.dumps(extraction_res)),
         )
         doc_id = cur.lastrowid
         
