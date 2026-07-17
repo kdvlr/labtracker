@@ -1529,6 +1529,25 @@ function renderUpload(main) {
     } }, "Upload & extract"),
     status,
   ]);
+
+  card.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    card.classList.add("dragover");
+  });
+  card.addEventListener("dragleave", () => {
+    card.classList.remove("dragover");
+  });
+  card.addEventListener("drop", (e) => {
+    e.preventDefault();
+    card.classList.remove("dragover");
+    if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+      fileInput.files = e.dataTransfer.files;
+      const file = e.dataTransfer.files[0];
+      pasteInput.value = `📋 Attached: ${file.name}`;
+      toast("File dropped successfully!");
+    }
+  });
+
   main.append(card, reviewMount);
 }
 
