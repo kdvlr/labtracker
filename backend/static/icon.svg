@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e6eee9" />
+      <stop offset="100%" stop-color="#b6c5be" />
+    </linearGradient>
+    <linearGradient id="flaskGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#006b54" />
+      <stop offset="100%" stop-color="#003a2c" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+  <!-- Rounded Base Background -->
+  <rect width="512" height="512" rx="128" fill="url(#bgGrad)" />
+  
+  <!-- Outer glowing ring -->
+  <circle cx="256" cy="256" r="160" fill="none" stroke="#005a45" stroke-width="8" opacity="0.15" />
+
+  <!-- Flask Drawing group -->
+  <g transform="translate(0, 8)">
+    <!-- Flask Body Shadow/Back -->
+    <path d="M256 120a16 16 0 0 0-16 16v32.6a16 16 0 0 1-4.7 11.2l-98.6 98.6a48 48 0 0 0-14 34v48.6a48 48 0 0 0 48 48h170.6a48 48 0 0 0 48-48v-48.6a48 48 0 0 0-14-34l-98.6-98.6a16 16 0 0 1-4.7-11.2V136a16 16 0 0 0-16-16h-16z" fill="url(#flaskGrad)" filter="url(#glow)" />
+    
+    <!-- Liquid Level inside flask -->
+    <path d="M158 290l98 98h-110c-15 0-25-10-25-25v-25c0-18 10-34 25-44l12-4z" fill="#8bf6d7" opacity="0.9" />
+    <path d="M354 290l-98 98h110c15 0 25-10 25-25v-25c0-18-10-34-25-44l-12-4z" fill="#84d7be" opacity="0.7" />
+    
+    <!-- Pulse Line / ECG overlay on flask -->
+    <path d="M180 340h30l10-25 15 50 15-35 10 10h40" fill="none" stroke="#ffffff" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" />
+
+    <!-- Glass Flask Highlight Rim -->
+    <path d="M256 120a16 16 0 0 0-16 16v32.6a16 16 0 0 1-4.7 11.2l-98.6 98.6a48 48 0 0 0-14 34v48.6a48 48 0 0 0 48 48h170.6a48 48 0 0 0 48-48v-48.6a48 48 0 0 0-14-34l-98.6-98.6a16 16 0 0 1-4.7-11.2V136a16 16 0 0 0-16-16h-16z" fill="none" stroke="#ffffff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" opacity="0.95" />
+    
+    <!-- Floating Beaker Bubbles -->
+    <circle cx="210" cy="240" r="10" fill="#8bf6d7" opacity="0.8" />
+    <circle cx="290" cy="220" r="14" fill="#ffffff" opacity="0.6" />
+    <circle cx="260" cy="180" r="8" fill="#84d7be" opacity="0.9" />
+  </g>
+</svg>

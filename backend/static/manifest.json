@@ -1,0 +1,24 @@
+{
+  "name": "LabTracker Medical Portal",
+  "short_name": "LabTracker",
+  "description": "Track, graph, and analyze medical lab test results.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f6faf8",
+  "theme_color": "#005a45",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}
