@@ -2143,23 +2143,9 @@ async function deleteImport(doc) {
   await loadCore(); render();
 }
 
-// Helper to group documents by month
+// Helper to group documents by patient name
 function getGroupKey(d) {
-  const dateStr = d.report_date || d.created_at;
-  if (!dateStr) return "Unknown Date";
-  try {
-    const parts = dateStr.split("T")[0].split("-");
-    if (parts.length >= 2) {
-      const year = parts[0];
-      const monthNum = parseInt(parts[1], 10);
-      const months = [
-        "January", "February", "March", "April", "May", "June",
-        "July", "August", "September", "October", "November", "December"
-      ];
-      return `${months[monthNum - 1]} ${year}`;
-    }
-  } catch (e) {}
-  return "Unknown Date";
+  return d.member_name || "Unassigned";
 }
 
 function renderDocList(container, docs) {
@@ -2175,10 +2161,17 @@ function renderDocList(container, docs) {
     if (state.docFilter.search) {
       const q = state.docFilter.search.toLowerCase();
       const filenameMatch = (d.filename || "").toLowerCase().includes(q);
-      const memberMatch = (d.member_name || "").toLowerCase().includes(q);
       const labMatch = (d.lab_name || "").toLowerCase().includes(q);
-      if (!filenameMatch && !memberMatch && !labMatch) {
+      if (!filenameMatch && !labMatch) {
         return false;
+      }
+    }
+    // 3. Patient filter
+    if (state.docFilter.patient) {
+      if (state.docFilter.patient === "unassigned") {
+        if (d.member_id !== null && d.member_name) return false;
+      } else {
+        if (d.member_id !== Number(state.docFilter.patient)) return false;
       }
     }
     return true;
@@ -2189,85 +2182,79 @@ function renderDocList(container, docs) {
     return;
   }
   
-  // Group by Month Year
+  // Slice to current pagination limit
+  const toShow = filtered.slice(0, state.docFilter.limit);
+  
+  // Group by patient
   const groups = {};
-  filtered.forEach(d => {
+  toShow.forEach(d => {
     const key = getGroupKey(d);
     if (!groups[key]) groups[key] = [];
     groups[key].push(d);
   });
   
-  // Order groups (using the date of the first item in each group to sort groups descending)
+  // Order groups alphabetically, but put "Unassigned" at the bottom
   const groupNames = Object.keys(groups).sort((a, b) => {
-    const dateA = groups[a][0].report_date || groups[a][0].created_at || "";
-    const dateB = groups[b][0].report_date || groups[b][0].created_at || "";
-    return dateB.localeCompare(dateA);
+    if (a === "Unassigned") return 1;
+    if (b === "Unassigned") return -1;
+    return a.localeCompare(b);
   });
-  
-  let displayedCount = 0;
   
   for (const groupName of groupNames) {
     const groupDocs = groups[groupName];
-    // Sort documents in the group descending
+    // Sort documents descending by date within the group
     groupDocs.sort((a, b) => {
       const dateA = a.report_date || a.created_at || "";
       const dateB = b.report_date || b.created_at || "";
       return dateB.localeCompare(dateA);
     });
     
-    // Only display items up to our pagination limit
-    const toShow = [];
-    for (const d of groupDocs) {
-      if (displayedCount < state.docFilter.limit) {
-        toShow.push(d);
-        displayedCount++;
-      }
-    }
+    const table = el("table");
+    table.append(el("thead", {}, el("tr", {}, [
+      el("th", {}, "File Name"),
+      el("th", {}, "Date : Lab"),
+      el("th", {}, "Results"),
+      el("th", {}, "Status"),
+      el("th", { style: "text-align: right;" }, "")
+    ])));
     
-    if (toShow.length > 0) {
-      const grid = el("div", { class: "docs-grid" });
-      toShow.forEach(d => {
-        const needsReview = d.status === "needs_review";
-        const statusTextMap = {
-          "needs_review": "Needs Review",
-          "fully_imported": "Fully Imported",
-          "partially_imported": "Partially Imported",
-          "failed": "Failed"
-        };
-        const statusPillClass = {
-          "needs_review": "pill-L",
-          "fully_imported": "pill-ok",
-          "partially_imported": "pill-L",
-          "failed": "pill-H"
-        }[d.status] || "pill-L";
-        
-        const cardActions = el("div", { class: "doc-card-actions" }, [
-          needsReview ? el("button", { class: "btn btn-sm btn-primary", onclick: () => openReview(d) }, "Review →") : null,
-          state.members.length > 1 ? el("button", { class: "btn btn-sm", onclick: () => openReassignDoc(d) }, "Reassign") : null,
-          el("a", { class: "btn btn-sm", href: `/api/documents/${d.id}/file`, target: "_blank" }, "Open File"),
-          el("button", { class: "btn btn-sm btn-danger", onclick: () => deleteImport(d) }, "Delete")
-        ].filter(Boolean));
-        
-        grid.append(el("div", { class: "doc-card" }, [
-          el("div", { class: "doc-card-header" }, [
-            el("span", { class: "doc-card-title" }, d.filename),
-            el("span", { class: "pill " + statusPillClass }, statusTextMap[d.status] || d.status)
-          ]),
-          el("div", { class: "doc-card-body" }, [
-            el("div", {}, [el("strong", {}, "Patient: "), d.member_name || "Unassigned"]),
-            el("div", {}, [el("strong", {}, "Date: "), fmtDate(d.report_date || d.created_at)]),
-            el("div", {}, [el("strong", {}, "Lab: "), d.lab_name || "Unknown Lab"]),
-            el("div", {}, [el("strong", {}, "Results: "), `${d.result_count || 0} items`])
-          ]),
-          cardActions
-        ]));
-      });
+    const tbody = el("tbody");
+    groupDocs.forEach(d => {
+      const needsReview = d.status === "needs_review" || d.status === "partially_imported";
+      const statusTextMap = {
+        "needs_review": "Needs Review",
+        "fully_imported": "Fully Imported",
+        "partially_imported": "Partially Imported",
+        "failed": "Failed"
+      };
+      const statusPillClass = {
+        "needs_review": "pill-L",
+        "fully_imported": "pill-ok",
+        "partially_imported": "pill-L",
+        "failed": "pill-H"
+      }[d.status] || "pill-L";
       
-      container.append(
-        el("h3", { style: "margin-top: 24px; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 6px;" }, groupName),
-        grid
-      );
-    }
+      const actions = el("div", { style: "display:flex; gap:6px; justify-content:flex-end; align-items:center;" }, [
+        needsReview ? el("button", { class: "btn btn-sm btn-primary", onclick: () => openReview(d) }, "Review →") : null,
+        state.members.length > 1 ? el("button", { class: "btn btn-sm", onclick: () => openReassignDoc(d) }, "Reassign") : null,
+        el("a", { class: "btn btn-sm", href: `/api/documents/${d.id}/file`, target: "_blank" }, "Open File"),
+        el("button", { class: "btn btn-sm btn-danger", onclick: () => deleteImport(d) }, "Delete")
+      ].filter(Boolean));
+      
+      tbody.append(el("tr", {}, [
+        el("td", { style: "font-weight: 600;" }, d.filename),
+        el("td", {}, `${fmtDate(d.report_date || d.created_at)} : ${d.lab_name || "Unknown Lab"}`),
+        el("td", {}, `${d.result_count || 0} items`),
+        el("td", {}, el("span", { class: "pill " + statusPillClass }, statusTextMap[d.status] || d.status)),
+        el("td", {}, actions)
+      ]));
+    });
+    table.append(tbody);
+    
+    container.append(
+      el("h3", { style: "margin-top: 24px; margin-bottom: 12px; font-family: var(--sans-display);" }, groupName),
+      el("div", { class: "card", style: "padding: 0; overflow-x: auto; margin-bottom: 24px;" }, table)
+    );
   }
   
   // Show Load More button if there are more filtered items
@@ -2295,6 +2282,7 @@ async function renderDocuments(main) {
   if (!state.docFilter) {
     state.docFilter = {
       search: "",
+      patient: "",
       status: null,
       limit: 15
     };
@@ -2345,7 +2333,7 @@ async function renderDocuments(main) {
   // Search input
   const searchInput = el("input", {
     type: "search",
-    placeholder: "Search by file name, patient, or lab...",
+    placeholder: "Search by file name or lab...",
     class: "doc-search-input",
     value: state.docFilter.search,
     oninput: (e) => {
@@ -2354,11 +2342,34 @@ async function renderDocuments(main) {
       renderDocList(listContainer, docs);
     }
   });
-  const searchBox = el("div", { class: "doc-search-box" }, searchInput);
+  
+  // Patient filter dropdown
+  const patientSel = el("select", {
+    class: "doc-patient-filter-select",
+    style: "width: 100%;",
+    onchange: (e) => {
+      state.docFilter.patient = e.target.value;
+      state.docFilter.limit = 15;
+      renderDocList(listContainer, docs);
+    }
+  });
+  patientSel.append(el("option", { value: "" }, "All Patients"));
+  patientSel.append(el("option", { value: "unassigned" }, "Unassigned"));
+  state.members.forEach(m => {
+    patientSel.append(el("option", { value: String(m.id), ...(state.docFilter.patient === String(m.id) ? { selected: "" } : {}) }, m.name));
+  });
+  patientSel.value = state.docFilter.patient;
+  
+  const filterRow = el("div", { 
+    style: "display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 20px; align-items: center;" 
+  }, [
+    el("div", { class: "doc-search-box", style: "margin: 0;" }, searchInput),
+    el("div", { class: "field", style: "margin: 0;" }, patientSel)
+  ]);
   
   const listContainer = el("div", { class: "docs-list-container" });
   
-  main.append(tallies, searchBox, listContainer);
+  main.append(tallies, filterRow, listContainer);
   renderDocList(listContainer, docs);
 }
 
