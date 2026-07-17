@@ -12,12 +12,56 @@ const state = {
 
 state.history = [];
 
+function isViewPrivate(view, activeMemberId) {
+  if (view === "settings" && state.access.has_pin) return true;
+  if (!activeMemberId) return false;
+  const m = state.members.find(x => x.id === activeMemberId);
+  return m ? !!m.private : false;
+}
+
 function navigateTo(view, extras = {}) {
   // Ignore redundant clicks on the current view/member
   if (state.view === view && (extras.activeMember === undefined || extras.activeMember === state.activeMember)) {
     return;
   }
 
+  const targetMemberId = extras.activeMember !== undefined ? extras.activeMember : state.activeMember;
+  const targetPrivate = isViewPrivate(view, targetMemberId);
+
+  // If target view is private and we are locked, prompt for PIN first!
+  if (state.access.has_pin && !state.access.unlocked && targetPrivate) {
+    openUnlockModal(
+      async () => {
+        // Once unlocked, state.members will be reloaded and contain the private member.
+        // We can now safely navigate.
+        navigateTo(view, extras);
+      },
+      () => {
+        // Cancelled, do nothing
+      }
+    );
+    return;
+  }
+
+  // If we are currently unlocked, and navigating away to a public view, automatically lock!
+  const currentMemberId = state.activeMember;
+  const currentPrivate = isViewPrivate(state.view, currentMemberId);
+  if (state.access.unlocked && currentPrivate && !targetPrivate) {
+    // Navigating away from a private view to a public view -> Lock!
+    api("/lock", { method: "POST" }).catch(() => {});
+    setUnlockToken(null);
+    state.access.unlocked = false;
+    // Reload core to update member list (hiding private ones)
+    loadCore().then(() => {
+      performNavigation(view, extras);
+    });
+    return;
+  }
+
+  performNavigation(view, extras);
+}
+
+function performNavigation(view, extras) {
   const entry = {
     view: state.view,
     activeMember: state.activeMember,
@@ -38,7 +82,32 @@ function navigateTo(view, extras = {}) {
 
 function navigateBack() {
   if (state.history.length > 0) {
-    const prev = state.history.pop();
+    const prev = state.history[state.history.length - 1]; // peek at the target
+    const currentMemberId = state.activeMember;
+    const currentPrivate = isViewPrivate(state.view, currentMemberId);
+    const targetPrivate = isViewPrivate(prev.view, prev.activeMember);
+
+    if (state.access.unlocked && currentPrivate && !targetPrivate) {
+      // Navigating back from a private view to a public view -> Lock!
+      api("/lock", { method: "POST" }).catch(() => {});
+      setUnlockToken(null);
+      state.access.unlocked = false;
+      loadCore().then(() => {
+        state.history.pop();
+        state.view = prev.view;
+        state.activeMember = prev.activeMember;
+        state.search = prev.search;
+        state.statusFilter = prev.statusFilter;
+        state._detail = prev._detail;
+        state._doc = prev._doc;
+        state._reviewDoc = prev._reviewDoc;
+        state._report = prev._report;
+        render();
+      });
+      return;
+    }
+
+    state.history.pop();
     state.view = prev.view;
     state.activeMember = prev.activeMember;
     state.search = prev.search;
@@ -49,6 +118,21 @@ function navigateBack() {
     state._report = prev._report;
     render();
   } else {
+    const currentMemberId = state.activeMember;
+    const currentPrivate = isViewPrivate(state.view, currentMemberId);
+    const targetPrivate = false; // Household is public
+
+    if (state.access.unlocked && currentPrivate && !targetPrivate) {
+      api("/lock", { method: "POST" }).catch(() => {});
+      setUnlockToken(null);
+      state.access.unlocked = false;
+      loadCore().then(() => {
+        state.view = "household";
+        render();
+      });
+      return;
+    }
+
     state.view = "household";
     render();
   }
@@ -560,7 +644,7 @@ const MEMBER_PALETTE = ["#2a78d6", "#1baf7a", "#eda100", "#e34948", "#4a3aa7", "
 // Nothing here is shown to a device that has never unlocked and has no reason
 // to: the lock affordance only appears once a PIN exists at all, and even then
 // it's a single quiet icon, not a login wall.
-function openUnlockModal() {
+function openUnlockModal(onSuccess = null, onCancel = null) {
   const pin = el("input", {
     type: "password", inputmode: "numeric", pattern: "[0-9]*", maxlength: "8",
     placeholder: "PIN", autocomplete: "off",
@@ -574,8 +658,12 @@ function openUnlockModal() {
       setUnlockToken(res.token);
       closeModal();
       await loadCore();
-      render();
-      toast("Unlocked");
+      if (onSuccess) {
+        onSuccess();
+      } else {
+        render();
+        toast("Unlocked");
+      }
     } catch (e) {
       err.textContent = e.message || "Incorrect PIN";
       err.style.display = "";
@@ -588,7 +676,7 @@ function openUnlockModal() {
     el("div", { class: "field" }, pin),
     err,
   ], [
-    el("button", { class: "btn btn-quiet", onclick: closeModal }, "Cancel"),
+    el("button", { class: "btn btn-quiet", onclick: () => { closeModal(); if (onCancel) onCancel(); } }, "Cancel"),
     el("button", { class: "btn btn-primary", onclick: submit }, "Unlock"),
   ]);
   setTimeout(() => pin.focus(), 50);
