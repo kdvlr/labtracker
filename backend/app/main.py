@@ -739,11 +739,47 @@ async def upload_document(
         # Insert into documents table
         cur = conn.execute(
             """INSERT INTO documents (member_id, filename, stored_name, mime, size, report_date, lab_name, status, extraction)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 'extracted', ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'needs_review', ?)""",
             (member_id, file.filename, stored_name, mime, len(data), report_date, lab_name, json.dumps(extraction_res)),
         )
         doc_id = cur.lastrowid
         
+        # Populate document_items table
+        for r in parsed.get("results", []):
+            name = r.get("test_name")
+            value, parsed_qual = parse_value(r.get("value"))
+            qualifier = r.get("qualifier") or parsed_qual
+            if qualifier not in ("<", ">"):
+                qualifier = None
+            unit = (r.get("unit") or "").strip()
+            value_text = (r.get("value_text") or "").strip() or None
+            if (value is None and value_text is None) or not name or not str(name).strip():
+                continue
+            ref_low = to_number(r.get("ref_low"))
+            ref_high = to_number(r.get("ref_high"))
+            page_num = r.get("page_number")
+            try:
+                page_num = int(float(page_num)) if page_num is not None else 1
+            except ValueError:
+                page_num = 1
+                
+            tt = match_test_type(name, types)
+            canonical = None
+            if tt and value is not None:
+                canonical = to_canonical(value, unit, tt["canonical_unit"], tt["conversions"])
+            match_ok = tt is not None and (value is None or canonical is not None)
+            
+            conn.execute(
+                """INSERT INTO document_items (
+                    document_id, raw_name, raw_value, raw_value_text, raw_unit, raw_qualifier, raw_flag,
+                    raw_ref_low, raw_ref_high, page_number, test_type_id, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'needs_review')""",
+                (
+                    doc_id, name, value, value_text, unit, qualifier, r.get("flag"),
+                    ref_low, ref_high, page_num, tt["id"] if match_ok else None
+                )
+            )
+            
         # Update extraction payload with real document ID
         extraction_res["document_id"] = doc_id
         conn.execute("UPDATE documents SET extraction = ? WHERE id = ?", (json.dumps(extraction_res), doc_id))
@@ -915,8 +951,48 @@ def extract_document(doc_id: int, req: ExtractReq, request: Request):
             "model": model,
             "items": items,
         }
+        
+        # Clear existing items and update documents status
+        conn.execute("DELETE FROM document_items WHERE document_id = ?", (doc_id,))
+        
+        # Populate document_items table
+        for r in parsed.get("results", []):
+            name = r.get("test_name")
+            value, parsed_qual = parse_value(r.get("value"))
+            qualifier = r.get("qualifier") or parsed_qual
+            if qualifier not in ("<", ">"):
+                qualifier = None
+            unit = (r.get("unit") or "").strip()
+            value_text = (r.get("value_text") or "").strip() or None
+            if (value is None and value_text is None) or not name or not str(name).strip():
+                continue
+            ref_low = to_number(r.get("ref_low"))
+            ref_high = to_number(r.get("ref_high"))
+            page_num = r.get("page_number")
+            try:
+                page_num = int(float(page_num)) if page_num is not None else 1
+            except ValueError:
+                page_num = 1
+                
+            tt = match_test_type(name, types)
+            canonical = None
+            if tt and value is not None:
+                canonical = to_canonical(value, unit, tt["canonical_unit"], tt["conversions"])
+            match_ok = tt is not None and (value is None or canonical is not None)
+            
+            conn.execute(
+                """INSERT INTO document_items (
+                    document_id, raw_name, raw_value, raw_value_text, raw_unit, raw_qualifier, raw_flag,
+                    raw_ref_low, raw_ref_high, page_number, test_type_id, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'needs_review')""",
+                (
+                    doc_id, name, value, value_text, unit, qualifier, r.get("flag"),
+                    ref_low, ref_high, page_num, tt["id"] if match_ok else None
+                )
+            )
+
         conn.execute(
-            """UPDATE documents SET status = 'extracted',
+            """UPDATE documents SET status = 'needs_review',
                    report_date = COALESCE(?, report_date),
                    lab_name = COALESCE(?, lab_name),
                    extraction = ? WHERE id = ?""",
@@ -935,12 +1011,64 @@ def get_extraction(doc_id: int, request: Request):
     conn = get_db()
     try:
         _require_doc(conn, request, doc_id)
-        row = conn.execute("SELECT extraction FROM documents WHERE id = ?", (doc_id,)).fetchone()
-        if not row:
+        doc = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+        if not doc:
             raise HTTPException(404, "Not found")
-        if not row["extraction"]:
-            raise HTTPException(404, "No saved extraction — run extraction first")
-        return json.loads(row["extraction"])
+            
+        items = conn.execute("SELECT * FROM document_items WHERE document_id = ?", (doc_id,)).fetchall()
+        
+        # Build items payload
+        types = {t["id"]: t for t in _test_types(conn)}
+        item_list = []
+        for it in items:
+            tt = types.get(it["test_type_id"]) if it["test_type_id"] else None
+            canonical = None
+            if tt and it["raw_value"] is not None:
+                canonical = to_canonical(it["raw_value"], it["raw_unit"], tt["canonical_unit"], tt["conversions"])
+            match_ok = tt is not None and (it["raw_value"] is None or canonical is not None)
+            
+            item_list.append({
+                "id": it["id"],
+                "test_name": it["raw_name"],
+                "value": it["raw_value"],
+                "value_text": it["raw_value_text"],
+                "qualifier": it["raw_qualifier"],
+                "unit": it["raw_unit"],
+                "ref_low": it["raw_ref_low"],
+                "ref_high": it["raw_ref_high"],
+                "flag": it["raw_flag"],
+                "page_number": it["page_number"],
+                "matched_test_type_id": it["test_type_id"] if match_ok else None,
+                "matched_name": tt["name"] if match_ok else None,
+                "canonical_unit": tt["canonical_unit"] if match_ok else None,
+                "value_canonical": canonical if match_ok else None,
+                "unit_known": match_ok,
+                "status": it["status"],
+                "error_reason": it["error_reason"],
+                "result_id": it["result_id"]
+            })
+            
+        # Try to parse provider and model from extraction fallback
+        provider = None
+        model = None
+        if doc["extraction"]:
+            try:
+                ext_payload = json.loads(doc["extraction"])
+                provider = ext_payload.get("provider")
+                model = ext_payload.get("model")
+            except Exception:
+                pass
+                
+        return {
+            "document_id": doc_id,
+            "report_date": doc["report_date"],
+            "lab_name": doc["lab_name"],
+            "patient_name": doc.get("patient_name") or (json.loads(doc["extraction"]).get("patient_name") if doc["extraction"] else None),
+            "status": doc["status"],
+            "provider": provider,
+            "model": model,
+            "items": item_list
+        }
     finally:
         conn.close()
 
@@ -957,6 +1085,7 @@ class CommitItem(BaseModel):
     ref_low: Optional[float] = None
     ref_high: Optional[float] = None
     note: Optional[str] = None
+    document_item_id: Optional[int] = None
 
 
 class CommitReq(BaseModel):
@@ -992,10 +1121,16 @@ def commit_results(req: CommitReq, request: Request):
         skipped = []
         duplicates = []
         prepared = []  # rows that pass validation, ready to insert
+        
+        # Track items skipped in this commit pass
+        skipped_item_ids = {} # item_id -> reason
+        
         for it in req.items:
             tt = types.get(it.test_type_id)
             if not tt:
                 skipped.append({"reason": "unknown test type"})
+                if it.document_item_id:
+                    skipped_item_ids[it.document_item_id] = "unknown test type"
                 continue
 
             # Qualitative result: store the text as reported. There's no unit to
@@ -1017,6 +1152,8 @@ def commit_results(req: CommitReq, request: Request):
                 continue
             if it.value is None:
                 skipped.append({"name": tt["name"], "reason": "no value reported"})
+                if it.document_item_id:
+                    skipped_item_ids[it.document_item_id] = "no value reported"
                 continue
 
             canonical = to_canonical(it.value, it.unit, tt["canonical_unit"], tt["conversions"])
@@ -1028,6 +1165,8 @@ def commit_results(req: CommitReq, request: Request):
                 else:
                     reason = f"unit '{it.unit}' can't convert to {tt['canonical_unit'] or 'its unit'}"
                 skipped.append({"name": tt["name"], "unit": it.unit, "reason": reason})
+                if it.document_item_id:
+                    skipped_item_ids[it.document_item_id] = reason
                 continue
             rlow_c = to_canonical(it.ref_low, it.unit, tt["canonical_unit"], tt["conversions"]) if it.ref_low is not None else None
             rhigh_c = to_canonical(it.ref_high, it.unit, tt["canonical_unit"], tt["conversions"]) if it.ref_high is not None else None
@@ -1067,7 +1206,7 @@ def commit_results(req: CommitReq, request: Request):
 
         created = 0
         for it, canonical, rlow_c, rhigh_c, flag, qualifier, text in prepared:
-            conn.execute(
+            cur = conn.execute(
                 """INSERT INTO results
                    (member_id, test_type_id, document_id, taken_at, value, unit, value_canonical,
                     value_text, ref_low, ref_high, ref_low_canonical, ref_high_canonical,
@@ -1079,11 +1218,154 @@ def commit_results(req: CommitReq, request: Request):
                     rlow_c, rhigh_c, flag, qualifier, it.note,
                 ),
             )
+            result_id = cur.lastrowid
             created += 1
-        if req.document_id and created:
-            conn.execute("UPDATE documents SET status = 'committed', member_id = COALESCE(member_id, ?) WHERE id = ?", (req.member_id, req.document_id))
+            
+            # If from a document_items, update its status
+            if it.document_item_id:
+                conn.execute(
+                    "UPDATE document_items SET status = 'imported', result_id = ? WHERE id = ?",
+                    (result_id, it.document_item_id)
+                )
+
+        if req.document_id:
+            # Update skipped items
+            for item_id, reason in skipped_item_ids.items():
+                conn.execute(
+                    "UPDATE document_items SET status = 'skipped', error_reason = ? WHERE id = ?",
+                    (reason, item_id)
+                )
+                
+            # If the user didn't submit some of the document items, mark them as skipped/not selected
+            conn.execute(
+                """UPDATE document_items SET status = 'skipped', error_reason = 'Not selected for import'
+                   WHERE document_id = ? AND status = 'needs_review'""",
+                (req.document_id,)
+            )
+            
+            # Recalculate document status
+            total_count = conn.execute("SELECT COUNT(*) FROM document_items WHERE document_id = ?", (req.document_id,)).fetchone()[0]
+            imported_count = conn.execute("SELECT COUNT(*) FROM document_items WHERE document_id = ? AND status = 'imported'", (req.document_id,)).fetchone()[0]
+            
+            if imported_count == total_count:
+                new_status = 'fully_imported'
+            elif imported_count > 0:
+                new_status = 'partially_imported'
+            else:
+                new_status = 'needs_review'
+                
+            conn.execute(
+                "UPDATE documents SET status = ?, member_id = COALESCE(member_id, ?) WHERE id = ?",
+                (new_status, req.member_id, req.document_id)
+            )
+            
         conn.commit()
         return {"created": created, "skipped": skipped, "duplicates": duplicates}
+    finally:
+        conn.close()
+
+
+class ItemImportReq(BaseModel):
+    member_id: int
+    taken_at: str
+    item: CommitItem
+
+
+@app.post("/api/documents/{doc_id}/items/{item_id}/import")
+def import_document_item(doc_id: int, item_id: int, req: ItemImportReq, request: Request):
+    conn = get_db()
+    try:
+        _require_member(conn, request, req.member_id)
+        
+        # Verify document and item exist
+        doc = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+        if not doc:
+            raise HTTPException(404, "Document not found")
+        item_row = conn.execute("SELECT * FROM document_items WHERE id = ? AND document_id = ?", (item_id, doc_id)).fetchone()
+        if not item_row:
+            raise HTTPException(404, "Document item not found")
+            
+        types = {t["id"]: t for t in _test_types(conn)}
+        tt = types.get(req.item.test_type_id)
+        if not tt:
+            raise HTTPException(400, "Unknown test type")
+            
+        member = conn.execute("SELECT * FROM members WHERE id = ?", (req.member_id,)).fetchone()
+        m_sex = member["sex"] if member else None
+        m_age = age_at(member["dob"], req.taken_at) if member else None
+        
+        # Validation
+        text = (req.item.value_text or "").strip()
+        if req.item.value is None and text:
+            q_flag = req.item.flag if req.item.flag in ("H", "L") else None
+            canonical = None
+            rlow_c, rhigh_c = None, None
+            flag = q_flag
+            qualifier = None
+        else:
+            if req.item.value is None:
+                raise HTTPException(400, "No value reported")
+                
+            canonical = to_canonical(req.item.value, req.item.unit, tt["canonical_unit"], tt["conversions"])
+            if canonical is None:
+                if not (req.item.unit or "").strip():
+                    reason = f"No unit reported (expected {tt['canonical_unit']})"
+                else:
+                    reason = f"Unit '{req.item.unit}' cannot convert to {tt['canonical_unit']}"
+                raise HTTPException(400, reason)
+                
+            rlow_c = to_canonical(req.item.ref_low, req.item.unit, tt["canonical_unit"], tt["conversions"]) if req.item.ref_low is not None else None
+            rhigh_c = to_canonical(req.item.ref_high, req.item.unit, tt["canonical_unit"], tt["conversions"]) if req.item.ref_high is not None else None
+            
+            if rlow_c is not None or rhigh_c is not None:
+                eff_low, eff_high = rlow_c, rhigh_c
+            else:
+                eff_low, eff_high = resolve_range(tt["slug"], tt["ref_low"], tt["ref_high"], m_sex, m_age)
+                
+            qualifier = req.item.qualifier if req.item.qualifier in ("<", ">") else None
+            flag = compute_flag(canonical, eff_low, eff_high, qualifier)
+            
+        # Insert result
+        cur = conn.execute(
+            """INSERT INTO results
+               (member_id, test_type_id, document_id, taken_at, value, unit, value_canonical,
+                value_text, ref_low, ref_high, ref_low_canonical, ref_high_canonical,
+                flag, qualifier, note)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                req.member_id, req.item.test_type_id, doc_id, req.taken_at,
+                req.item.value, req.item.unit, canonical, text if text else None,
+                req.item.ref_low, req.item.ref_high, rlow_c, rhigh_c, flag, qualifier, req.item.note,
+            ),
+        )
+        result_id = cur.lastrowid
+        
+        # Update document_item
+        conn.execute(
+            """UPDATE document_items 
+               SET status = 'imported', result_id = ?, test_type_id = ?
+               WHERE id = ?""",
+            (result_id, req.item.test_type_id, item_id)
+        )
+        
+        # Recalculate document status
+        total_count = conn.execute("SELECT COUNT(*) FROM document_items WHERE document_id = ?", (doc_id,)).fetchone()[0]
+        imported_count = conn.execute("SELECT COUNT(*) FROM document_items WHERE document_id = ? AND status = 'imported'", (doc_id,)).fetchone()[0]
+        
+        if imported_count == total_count:
+            new_status = 'fully_imported'
+        elif imported_count > 0:
+            new_status = 'partially_imported'
+        else:
+            new_status = 'needs_review'
+            
+        conn.execute(
+            "UPDATE documents SET status = ?, member_id = COALESCE(member_id, ?) WHERE id = ?",
+            (new_status, req.member_id, doc_id)
+        )
+        
+        conn.commit()
+        return {"ok": True, "result_id": result_id, "document_status": new_status}
     finally:
         conn.close()
 
@@ -1323,6 +1605,103 @@ def put_settings(s: SettingsIn, request: Request):
                 "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 (key, value),
             )
+        conn.commit()
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+CATEGORIZATION_SYSTEM_PROMPT = """You are a medical lab data categorization assistant.
+You are given a list of test names. For each test name, choose the single most appropriate category from the following allowed list:
+- Heavy Metals
+- Urine
+- Heart
+- Liver
+- Kidney
+- Thyroid
+- Metabolic
+- Iron
+- Bone Health
+- Minerals
+- Vitamins
+- Hormones
+- Inflammation
+- Blood
+- Other
+
+Return ONLY a valid JSON object matching this schema:
+{
+  "suggestions": [
+    {
+      "test_name": "string",
+      "category": "string (one of the allowed category values above)"
+    }
+  ]
+}
+Do not include any prose or markdown fences outside the JSON object."""
+
+
+class BatchCategorizeReq(BaseModel):
+    test_names: list[str]
+
+
+class CategoryOverrideReq(BaseModel):
+    test_type_id: int
+    category: str
+
+
+@app.get("/api/settings/defaults")
+def get_settings_defaults(request: Request):
+    conn = get_db()
+    try:
+        _require_unlocked(conn, request)
+        return {
+            "prompt_extraction_system": ai.EXTRACTION_SYSTEM,
+            "prompt_qa_system": ai.QA_SYSTEM,
+            "prompt_biomarker_personalized": ai.BIOMARKER_PERSONALIZED_SYSTEM,
+            "prompt_biomarker_standard": ai.BIOMARKER_STANDARD_SYSTEM
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/api/test-types/batch-categorize")
+def batch_categorize_tests(req: BatchCategorizeReq, request: Request):
+    conn = get_db()
+    try:
+        _require_unlocked(conn, request)
+        if not req.test_names:
+            return {"suggestions": []}
+            
+        provider, model, key = _ai_config(conn)
+        prompt = f"Categorize these tests:\n" + "\n".join(f"- {name}" for name in req.test_names)
+        
+        try:
+            import json
+            text = ai.chat(provider, model, key, CATEGORIZATION_SYSTEM_PROMPT, prompt).strip()
+            if text.startswith("```"):
+                lines = text.split("\n")
+                if lines[0].startswith("```json"):
+                    text = "\n".join(lines[1:-1])
+                elif lines[0].startswith("```"):
+                    text = "\n".join(lines[1:-1])
+            parsed = json.loads(text)
+            return parsed
+        except Exception as e:
+            raise HTTPException(400, f"AI categorization failed: {str(e)}")
+    finally:
+        conn.close()
+
+
+@app.post("/api/test-types/override-category")
+def override_test_type_category(req: CategoryOverrideReq, request: Request):
+    conn = get_db()
+    try:
+        _require_unlocked(conn, request)
+        conn.execute(
+            "UPDATE test_types SET category = ?, category_override = ? WHERE id = ?",
+            (req.category, req.category, req.test_type_id)
+        )
         conn.commit()
         return {"ok": True}
     finally:

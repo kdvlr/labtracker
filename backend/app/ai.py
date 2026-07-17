@@ -27,7 +27,8 @@ Return ONLY valid JSON, no prose, matching this schema:
       "qualifier": "<, >, or null",
       "ref_low": number or null,
       "ref_high": number or null,
-      "flag": "H, L, or null"
+      "flag": "H, L, or null",
+      "page_number": "integer or null (1-indexed page number where this result was found)"
     }
   ]
 }
@@ -40,7 +41,8 @@ numeric result, set "value_text" to null.
 If a result is printed as a detection/reporting limit rather than a measurement
 (e.g. "<0.01", ">1000"), put the bare number in "value" and the comparator in
 "qualifier" — never drop the comparator, it changes what the result means.
-Always report the unit exactly as printed; only use null if no unit is shown."""
+Always report the unit exactly as printed; only use null if no unit is shown.
+Always report the 1-indexed page number of the PDF/image where you found the result in the "page_number" field. If page number is unknown or not applicable, default to 1."""
 
 QA_SYSTEM = """You are a careful assistant helping someone understand their (or
 their family's) lab test results over time. You are given structured historical

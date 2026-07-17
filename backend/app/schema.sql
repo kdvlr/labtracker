@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS test_types (
     -- JSON array of interpretation bands (canonical units), ascending:
     -- [{"to": upper|null, "c": "green|amber|red", "label": "..."}]. NULL = derive
     -- a simple in/out band from ref_low/ref_high on the client.
-    zones TEXT
+    zones TEXT,
+    category_override TEXT
 );
 
 CREATE TABLE IF NOT EXISTS documents (
@@ -82,6 +83,26 @@ CREATE TABLE IF NOT EXISTS results (
 
 CREATE INDEX IF NOT EXISTS idx_results_member_test ON results(member_id, test_type_id, taken_at);
 CREATE INDEX IF NOT EXISTS idx_results_document ON results(document_id);
+
+CREATE TABLE IF NOT EXISTS document_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    raw_name TEXT NOT NULL,
+    raw_value REAL,
+    raw_value_text TEXT,
+    raw_unit TEXT,
+    raw_qualifier TEXT,
+    raw_flag TEXT,
+    raw_ref_low REAL,
+    raw_ref_high REAL,
+    page_number INTEGER,
+    test_type_id INTEGER REFERENCES test_types(id) ON DELETE SET NULL,
+    status TEXT NOT NULL DEFAULT 'needs_review', -- needs_review | imported | skipped | errored
+    error_reason TEXT,
+    result_id INTEGER REFERENCES results(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_document_items_doc ON document_items(document_id);
 
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
