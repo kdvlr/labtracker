@@ -9,6 +9,48 @@ const state = {
   statusFilter: null,
 };
 
+state.history = [];
+
+function navigateTo(view, extras = {}) {
+  const entry = {
+    view: state.view,
+    activeMember: state.activeMember,
+    search: state.search,
+    statusFilter: state.statusFilter,
+    _detail: state._detail ? { ...state._detail } : null,
+    _doc: state._doc ? { ...state._doc } : null,
+    _reviewDoc: state._reviewDoc ? { ...state._reviewDoc } : null,
+    _report: state._report ? { ...state._report } : null
+  };
+  
+  if (!state.history.length || state.history[state.history.length - 1].view !== state.view || state.history[state.history.length - 1].activeMember !== state.activeMember) {
+    state.history.push(entry);
+  }
+  
+  state.view = view;
+  Object.assign(state, extras);
+  render();
+}
+
+function navigateBack() {
+  if (state.history.length > 0) {
+    const prev = state.history.pop();
+    state.view = prev.view;
+    state.activeMember = prev.activeMember;
+    state.search = prev.search;
+    state.statusFilter = prev.statusFilter;
+    state._detail = prev._detail;
+    state._doc = prev._doc;
+    state._reviewDoc = prev._reviewDoc;
+    state._report = prev._report;
+    render();
+  } else {
+    state.view = "household";
+    render();
+  }
+}
+
+
 const $ = (sel, root = document) => root.querySelector(sel);
 const el = (tag, props = {}, children = []) => {
   const n = document.createElement(tag);
@@ -314,7 +356,8 @@ function renderSidebar() {
   for (const m of state.members) {
     nav.append(el("button", {
       class: "member-item" + (m.id === state.activeMember && state.view === "overview" ? " active" : ""),
-      onclick: () => { state.activeMember = m.id; state.view = "overview"; render(); },
+      onclick: () => { navigateTo("overview", { activeMember: m.id }); },
+
     }, [el("span", { class: "avatar", style: `background:${m.color || "#2f6fe0"}` }, initials(m.name)), m.name]));
   }
 }
@@ -352,8 +395,8 @@ async function renderOverview(main) {
     ]),
     el("div", { class: "head-actions" }, [
       el("button", { class: "btn", onclick: () => openEditMember(member) }, "✎ Edit"),
-      el("button", { class: "btn", onclick: () => { state._report = { member }; state.view = "report"; render(); } }, "🖨 Doctor report"),
-      el("button", { class: "btn", onclick: () => { state.view = "upload"; render(); } }, "＋ Add results"),
+      el("button", { class: "btn", onclick: () => { navigateTo("report", { _report: { member } }); } }, "🖨 Doctor report"),
+      el("button", { class: "btn", onclick: () => { navigateTo("upload"); } }, "＋ Add results"),
       el("button", { class: "btn btn-primary", onclick: () => openAsk(member) }, "✨ Ask AI"),
     ]),
   ]));
@@ -365,7 +408,7 @@ async function renderOverview(main) {
       el("span", { class: "empty-icon" }, "🧫"),
       el("div", {}, `No results for ${member.name} yet.`),
       el("div", { style: "margin-top:6px;font-size:13.5px" }, "Upload a lab report and AI will extract the values — or type results in manually."),
-      el("div", { style: "margin-top:16px" }, el("button", { class: "btn btn-primary", onclick: () => { state.view = "upload"; render(); } }, "＋ Add results")),
+      el("div", { style: "margin-top:16px" }, el("button", { class: "btn btn-primary", onclick: () => { navigateTo("upload"); } }, "＋ Add results")),
     ]));
     return;
   }
@@ -534,8 +577,8 @@ function openEditMember(member) {
       if (confirm(`Delete ${member.name} and ALL their results? This cannot be undone.`)) {
         await api(`/members/${member.id}`, { method: "DELETE" });
         await loadCore();
-        state.activeMember = state.members[0]?.id || null;
-        state.view = "overview"; closeModal(); render();
+        closeModal();
+        navigateTo("overview", { activeMember: state.members[0]?.id || null });
         toast("Member deleted");
       }
     } }, "Delete member"),
@@ -645,7 +688,7 @@ async function renderHousehold(main) {
     const latest = summary.reduce((a, s) => (!a || (s.latest_at || "") > a ? (s.latest_at || "") : a), "");
 
     const card = el("div", { class: "hh-card" }, [
-      el("div", { class: "hh-head", onclick: () => { state.activeMember = m.id; state.view = "overview"; render(); } }, [
+      el("div", { class: "hh-head", onclick: () => { navigateTo("overview", { activeMember: m.id }); } }, [
         el("span", { class: "avatar", style: `background:${m.color || "#2f6fe0"}` }, initials(m.name)),
         el("div", { style: "min-width:0" }, [
           el("div", { class: "hh-name" }, m.name),
@@ -769,9 +812,7 @@ function rangeBar(value, zones) {
 }
 
 async function openDetail(member, testTypeId) {
-  state.view = "detail";
-  state._detail = { member, testTypeId };
-  render();
+  navigateTo("detail", { _detail: { member, testTypeId } });
 }
 
 async function renderDetail(main) {
@@ -785,7 +826,7 @@ async function renderDetail(main) {
   state._detail.tab = state._detail.tab || "results";
 
   main.append(el("div", { class: "detail-head" }, [
-    el("button", { class: "back", onclick: () => { state.view = "overview"; render(); } }, "← Back"),
+    el("button", { class: "back", onclick: () => { navigateBack(); } }, "← Back"),
   ]));
 
   const last = rows[rows.length - 1];
@@ -1409,9 +1450,8 @@ function renderManualEntry(main) {
       if (res.skipped?.length) msg += ` · skipped ${res.skipped.length} (${res.skipped[0].reason})`;
       toast(msg);
       if (res.created) {
-        state.activeMember = Number(memberSel.value);
-        state.view = "overview";
-        await loadCore(); render();
+        await loadCore();
+        navigateTo("overview", { activeMember: Number(memberSel.value) });
       }
     } catch (e) {
       toast("Error: " + e.message);
@@ -1514,8 +1554,8 @@ function renderReview(mount, doc, memberId, result) {
       let msg = `Saved ${res.created} result${res.created !== 1 ? "s" : ""}`;
       if (nSkip) msg += ` · skipped ${nSkip} (${res.skipped[0].reason})`;
       toast(msg);
-      state.activeMember = mid; state.view = "overview";
-      await loadCore(); render();
+      await loadCore();
+      navigateTo("overview", { activeMember: mid });
     } catch (e) {
       toast("Error: " + e.message);
     } finally {
@@ -1609,15 +1649,13 @@ async function renderDocuments(main) {
 // Resume a document that was uploaded/extracted but never committed. Uses the
 // saved extraction when present (free, instant); otherwise runs extraction.
 function openReview(doc) {
-  state.view = "review-doc";
-  state._reviewDoc = doc;
-  render();
+  navigateTo("review-doc", { _reviewDoc: doc });
 }
 
 async function renderReviewDoc(main) {
   const doc = state._reviewDoc;
   main.append(el("div", { class: "detail-head" }, [
-    el("button", { class: "back", onclick: () => { state.view = "documents"; render(); } }, "← Back to documents"),
+    el("button", { class: "back", onclick: () => { navigateBack(); } }, "← Back to documents"),
   ]));
   main.append(el("div", { class: "page-head" }, el("div", {}, [
     el("h1", { class: "page-title" }, "Review results"),
@@ -1679,7 +1717,7 @@ async function renderReport(main) {
   const summary = await api(`/members/${member.id}/summary`);
 
   main.append(el("div", { class: "no-print", style: "display:flex;gap:10px;margin-bottom:20px;align-items:center" }, [
-    el("button", { class: "back", style: "padding:0", onclick: () => { state.view = "overview"; render(); } }, "← Back"),
+    el("button", { class: "back", style: "padding:0", onclick: () => { navigateBack(); } }, "← Back"),
     el("span", { class: "spacer" }),
     el("a", { class: "btn", href: `/api/members/${member.id}/export.csv` }, "⬇ Export CSV"),
     el("button", { class: "btn btn-primary", onclick: () => window.print() }, "🖨 Print / Save PDF"),
@@ -1857,7 +1895,7 @@ function openAddMember() {
     el("button", { class: "btn btn-primary", onclick: async () => {
       if (!name.value.trim()) return toast("Name required");
       const m = await api("/members", { method: "POST", body: { name: name.value.trim(), dob: dob.value || null, sex: sex.value || null, color } });
-      await loadCore(); state.activeMember = m.id; state.view = "overview"; closeModal(); render();
+      await loadCore(); closeModal(); navigateTo("overview", { activeMember: m.id });
     } }, "Add"),
   ]);
 }
@@ -1865,8 +1903,13 @@ function openAddMember() {
 // ---------------- boot ----------------
 initTheme();
 $("#theme-toggle").addEventListener("click", toggleTheme);
-document.querySelectorAll(".nav-btn").forEach((b) => b.addEventListener("click", () => { state.view = b.dataset.view; render(); }));
+document.querySelectorAll(".nav-btn").forEach((b) => b.addEventListener("click", () => { navigateTo(b.dataset.view); }));
 $("#add-member").addEventListener("click", openAddMember);
+
+const brand = document.querySelector(".brand");
+if (brand) {
+  brand.addEventListener("click", () => { navigateTo("household"); });
+}
 
 loadCore().then(render).catch((e) => {
   $("#main").append(el("div", { class: "empty" }, "Failed to load: " + e.message));
