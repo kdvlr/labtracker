@@ -55,7 +55,7 @@ You must return ONLY a valid JSON object matching this schema:
   "high": "Personalized clinical ramifications and details of a high level.",
   "low": "Personalized clinical ramifications and details of a low level.",
   "age_related": "Observations or considerations relevant to a patient of this age.",
-  "related_tests": "How to interpret this result in conjunction with related panel tests."
+  "related_tests": "How to interpret this result and its historical trends in conjunction with the historical readings of related panel tests."
 }
 Do not include any prose outside the JSON object. Do not include markdown fences."""
 
