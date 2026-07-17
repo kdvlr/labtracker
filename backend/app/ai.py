@@ -48,6 +48,28 @@ data. Answer the user's question grounded ONLY in that data. Note trends,
 in/out-of-range values, and unit context. Be concise. Always add a brief reminder
 that this is not medical advice and they should consult a clinician for decisions."""
 
+BIOMARKER_PERSONALIZED_SYSTEM = """You are an expert clinical reference assistant explaining lab test results for a family member.
+You must return ONLY a valid JSON object matching this schema:
+{
+  "description": "Personalized description of what this biomarker measures and why it matters.",
+  "high": "Personalized clinical ramifications and details of a high level.",
+  "low": "Personalized clinical ramifications and details of a low level.",
+  "age_related": "Observations or considerations relevant to a patient of this age.",
+  "related_tests": "How to interpret this result in conjunction with related panel tests."
+}
+Do not include any prose outside the JSON object. Do not include markdown fences."""
+
+BIOMARKER_STANDARD_SYSTEM = """You are an expert clinical reference assistant explaining lab test results.
+You must return ONLY a valid JSON object matching this schema:
+{
+  "description": "Description of what this biomarker measures and why it matters.",
+  "high": "Clinical ramifications and details of a high level.",
+  "low": "Clinical ramifications and details of a low level.",
+  "age_related": "General observations or considerations relevant by age.",
+  "related_tests": "How this tracks with other biomarkers in the same panel."
+}
+Do not include any prose outside the JSON object. Do not include markdown fences."""
+
 DEFAULT_MODELS = {
     "anthropic": "claude-opus-4-8",
     "openai": "gpt-4o",
@@ -76,7 +98,7 @@ def _extract_json(text: str) -> dict:
 
 # ---------- Anthropic ----------
 
-def _anthropic_extract(key: str, model: str, data: bytes, mime: str) -> dict:
+def _anthropic_extract(key: str, model: str, data: bytes, mime: str, system_prompt: str) -> dict:
     import anthropic
 
     client = anthropic.Anthropic(api_key=key)
@@ -88,7 +110,7 @@ def _anthropic_extract(key: str, model: str, data: bytes, mime: str) -> dict:
     msg = client.messages.create(
         model=model,
         max_tokens=8000,
-        system=EXTRACTION_SYSTEM,
+        system=system_prompt,
         messages=[{"role": "user", "content": [source_block, {"type": "text", "text": "Extract the results as JSON."}]}],
     )
     text = "".join(b.text for b in msg.content if b.type == "text")
@@ -110,7 +132,7 @@ def _anthropic_chat(key: str, model: str, system: str, prompt: str) -> str:
 
 # ---------- OpenAI ----------
 
-def _openai_extract(key: str, model: str, data: bytes, mime: str) -> dict:
+def _openai_extract(key: str, model: str, data: bytes, mime: str, system_prompt: str) -> dict:
     b64 = base64.standard_b64encode(data).decode()
     if mime == "application/pdf":
         content = [
@@ -125,7 +147,7 @@ def _openai_extract(key: str, model: str, data: bytes, mime: str) -> dict:
     body = {
         "model": model,
         "messages": [
-            {"role": "system", "content": EXTRACTION_SYSTEM},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": content},
         ],
     }
@@ -161,10 +183,10 @@ def _openai_chat(key: str, model: str, system: str, prompt: str) -> str:
 
 # ---------- Gemini ----------
 
-def _gemini_extract(key: str, model: str, data: bytes, mime: str) -> dict:
+def _gemini_extract(key: str, model: str, data: bytes, mime: str, system_prompt: str) -> dict:
     b64 = base64.standard_b64encode(data).decode()
     body = {
-        "system_instruction": {"parts": [{"text": EXTRACTION_SYSTEM}]},
+        "system_instruction": {"parts": [{"text": system_prompt}]},
         "contents": [
             {
                 "parts": [
@@ -217,13 +239,14 @@ def resolve(provider: str, model: Optional[str], key: Optional[str]) -> tuple:
     return provider, model, key
 
 
-def extract(provider: str, model: Optional[str], key: Optional[str], data: bytes, mime: str) -> dict:
+def extract(provider: str, model: Optional[str], key: Optional[str], data: bytes, mime: str, system_prompt: Optional[str] = None) -> dict:
     provider, model, key = resolve(provider, model, key)
+    sys = system_prompt or EXTRACTION_SYSTEM
     if provider == "anthropic":
-        return _anthropic_extract(key, model, data, mime)
+        return _anthropic_extract(key, model, data, mime, sys)
     if provider == "openai":
-        return _openai_extract(key, model, data, mime)
-    return _gemini_extract(key, model, data, mime)
+        return _openai_extract(key, model, data, mime, sys)
+    return _gemini_extract(key, model, data, mime, sys)
 
 
 def chat(provider: str, model: Optional[str], key: Optional[str], system: str, prompt: str) -> str:
