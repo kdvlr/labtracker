@@ -855,17 +855,25 @@ function rangeBar(value, zones) {
   const span = (d1 - d0) || 1;
   const pos = (x) => Math.max(0, Math.min(100, ((x - d0) / span) * 100));
   const vz = zoneOf(value, zones) || { c: "green" };
-  const isAbnormal = vz.c === "red" || vz.c === "amber";
-  const fill = isAbnormal
-    ? { green: "var(--good-soft)", amber: "var(--low)", red: "var(--high)" }
-    : { green: "var(--range-in)", amber: "var(--range-warn)", red: "var(--range-out)" };
 
   const track = el("div", { class: "rbar-track" });
   let prev = d0;
   for (const z of zones) {
     const to = z.to == null ? d1 : z.to;
     const l = pos(prev), r = pos(to);
-    if (r > l) track.append(el("div", { class: "rbar-seg", style: `left:${l.toFixed(1)}%;width:${(r - l).toFixed(1)}%;background:${fill[z.c]}` }));
+    
+    let color;
+    if (z === vz) {
+      if (z.c === "green") color = "var(--range-in)";
+      else if (z.c === "amber") color = "var(--low)";
+      else if (z.c === "red") color = "var(--high)";
+    } else {
+      if (z.c === "green") color = "var(--good-soft)";
+      else if (z.c === "amber") color = "var(--range-warn)";
+      else if (z.c === "red") color = "var(--range-out)";
+    }
+
+    if (r > l) track.append(el("div", { class: "rbar-seg", style: `left:${l.toFixed(1)}%;width:${(r - l).toFixed(1)}%;background:${color}` }));
     prev = to;
   }
   
