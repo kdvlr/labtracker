@@ -261,7 +261,7 @@ body {
 .spark { margin-top: 14px; display: block; }
 
 /* ---------- household ---------- */
-.household-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+.household-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
 /* min-width:0 — grid/flex children default to min-width:auto, so a long
    nowrap marker name would refuse to shrink and push the card off-screen. */
 .household-grid > * { min-width: 0; }
