@@ -825,6 +825,33 @@ async function renderHousehold(main) {
     el("p", { class: "page-sub" }, "Everyone at a glance — who needs a closer look."),
   ])));
 
+  // Fetch documents for the waiting results banner
+  let docs = [];
+  try {
+    docs = await api("/documents");
+  } catch (e) {
+    console.error("Failed fetching documents for banner", e);
+  }
+  const pending = docs.filter((d) => d.status === "needs_review");
+  if (pending.length > 0) {
+    main.append(el("div", { 
+      class: "banner waiting-results-banner", 
+      style: "margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; background: var(--low-soft); border: 1px solid var(--hairline); padding: 12px 16px; border-radius: var(--radius-sm); color: var(--text-primary);" 
+    }, [
+      el("div", { style: "display: flex; align-items: center; gap: 8px;" }, [
+        el("span", { style: "font-size: 1.2rem;" }, "⏳"),
+        el("span", { style: "font-weight: 500;" }, 
+          `You have ${pending.length} document${pending.length > 1 ? "s" : ""} with extracted results waiting for review.`
+        )
+      ]),
+      el("button", { 
+        class: "btn btn-sm btn-primary", 
+        style: "margin: 0;",
+        onclick: () => navigateTo("documents") 
+      }, "Review Documents")
+    ]));
+  }
+
   if (!state.members.length) {
     main.append(el("div", { class: "card empty-card empty" }, [
       el("span", { class: "empty-icon" }, "👋"),
@@ -1794,105 +1821,292 @@ function renderManualEntry(main) {
   ]));
 }
 
-function renderReview(mount, doc, memberId, result) {
+function createCollapsible(title, count, contentEl, defaultOpen = false) {
+  const arrow = el("span", { style: "transition: transform 0.2s ease; margin-right: 8px; display: inline-block;" }, defaultOpen ? "▼" : "▶");
+  const countBadge = el("span", { class: "pill", style: "background: var(--page-tint); color: var(--text-secondary); margin-left: auto;" }, String(count));
+  
+  const header = el("div", { 
+    class: "card-header", 
+    style: "display: flex; align-items: center; cursor: pointer; padding: 12px 16px; font-weight: bold; background: var(--panel-2); border-radius: var(--radius-sm);" 
+  }, [
+    arrow,
+    el("span", { style: "font-family: var(--sans-display);" }, title),
+    countBadge
+  ]);
+  
+  contentEl.style.display = defaultOpen ? "block" : "none";
+  
+  const wrapper = el("div", { class: "card", style: "margin-bottom: 16px; overflow: hidden;" }, [
+    header,
+    contentEl
+  ]);
+  
+  header.onclick = () => {
+    const isVisible = contentEl.style.display !== "none";
+    contentEl.style.display = isVisible ? "none" : "block";
+    arrow.textContent = isVisible ? "▶" : "▼";
+  };
+  
+  return wrapper;
+}
+
+function renderReview(mount, doc, memberId, result, main) {
   mount.innerHTML = "";
   const dateInput = el("input", { type: "date", value: (result.report_date || "").slice(0, 10) || new Date().toISOString().slice(0, 10) });
+  
+  // Categorize items
+  const needsReviewItems = result.items.filter(it => it.status === "needs_review" || !it.status);
+  const importedItems = result.items.filter(it => it.status === "imported");
+  const skippedItems = result.items.filter(it => it.status === "skipped" || it.status === "failed");
+  
+  // 1. Needs Review Section
+  const needsReviewContent = el("div");
   const rows = [];
-
-  const head = el("div", { class: "review-row review-head" }, [
-    el("div", {}, "Test"), el("div", {}, "Value"), el("div", {}, "Unit"), el("div", {}, "Flag"), el("div", {}, ""),
-  ]);
-  const body = el("div");
-  result.items.forEach((item) => {
-    const matchSel = el("select");
-    matchSel.append(el("option", { value: "__new__" }, `➕ Track as new: ${item.test_name}`));
-    for (const t of state.testTypes) matchSel.append(el("option", { value: String(t.id) }, `Merge into: ${t.name}`));
-    matchSel.append(el("option", { value: "" }, "— skip (don't save) —"));
-    // Default: matched → merge into that type; otherwise track it as a new test.
-    matchSel.value = item.matched_test_type_id ? String(item.matched_test_type_id) : "__new__";
-    // A qualitative row ("Negative") is edited as text; there's no number to step.
-    const isQual = item.value == null && item.value_text != null;
-    const valInput = isQual
-      ? el("input", { type: "text", value: item.value_text })
-      : el("input", { type: "number", step: "any", value: item.value });
-    const unitInput = el("input", { type: "text", value: item.unit, style: "width:100%", ...(isQual ? { placeholder: "—", disabled: "" } : {}) });
-    const flagInput = el("input", { type: "text", value: item.flag || "", placeholder: "—", style: "width:100%" });
-    const warn = el("div", { class: "warn", style: "grid-column:1/-1", html: "" });
-    const rowEl = el("div", { class: "review-row" }, [
-      el("div", {}, [el("div", { style: "font-size:13px;color:var(--muted)" }, item.test_name), matchSel]),
-      valInput, unitInput, flagInput,
-      el("div", {}, ""),
+  
+  if (needsReviewItems.length === 0) {
+    needsReviewContent.append(el("div", { class: "empty", style: "padding: 16px 0;" }, "No items remaining to review."));
+  } else {
+    const head = el("div", { class: "review-row review-head" }, [
+      el("div", {}, "Test"), el("div", {}, "Value"), el("div", {}, "Unit"), el("div", {}, "Flag"), el("div", {}, "Action"),
     ]);
-    body.append(rowEl, warn);
-    rows.push({ matchSel, valInput, unitInput, flagInput, warn, item, isQual });
-  });
-
-  const commitBtn = el("button", { class: "btn btn-primary", onclick: async () => {
-    commitBtn.disabled = true;
-    const original = commitBtn.textContent;
-    commitBtn.textContent = "Saving…";
-    try {
-      const items = [];
-      for (const r of rows) {
-        const sel = r.matchSel.value;
-        if (sel === "") continue; // explicitly skipped
-        let typeId;
-        if (sel === "__new__") {
-          const created = await api("/test-types", { method: "POST", body: {
-            name: r.item.test_name,
-            canonical_unit: r.unitInput.value.trim(),
+    const body = el("div");
+    
+    needsReviewItems.forEach((item) => {
+      const matchSel = el("select", { style: "width:100%" });
+      matchSel.append(el("option", { value: "__new__" }, `➕ Track as new: ${item.test_name}`));
+      for (const t of state.testTypes) matchSel.append(el("option", { value: String(t.id) }, `Merge into: ${t.name}`));
+      matchSel.append(el("option", { value: "" }, "— skip (don't save) —"));
+      matchSel.value = item.matched_test_type_id ? String(item.matched_test_type_id) : "__new__";
+      
+      const isQual = item.value == null && item.value_text != null;
+      const valInput = isQual
+        ? el("input", { type: "text", value: item.value_text, style: "width:100%" })
+        : el("input", { type: "number", step: "any", value: item.value, style: "width:100%" });
+      const unitInput = el("input", { type: "text", value: item.unit, style: "width:100%", ...(isQual ? { placeholder: "—", disabled: "" } : {}) });
+      const flagInput = el("input", { type: "text", value: item.flag || "", placeholder: "—", style: "width:100%" });
+      const warn = el("div", { class: "warn", style: "grid-column:1/-1; display:none; margin-bottom:8px;" });
+      
+      // Page link helper
+      const pageLink = item.page_number 
+        ? el("a", { 
+            href: `/api/documents/${doc.id}/file#page=${item.page_number}`, 
+            target: "_blank", 
+            class: "pill pill-ok", 
+            style: "font-size: 11px; padding: 2px 6px; margin-left: 8px; text-decoration: none; display: inline-block;" 
+          }, `Page ${item.page_number}`)
+        : null;
+        
+      const rowLabel = el("div", {}, [
+        el("div", { style: "font-size:13px;color:var(--muted); display:flex; align-items:center; flex-wrap:wrap; margin-bottom:4px;" }, [
+          el("span", {}, item.test_name),
+          pageLink
+        ]),
+        matchSel
+      ]);
+      
+      const importRowBtn = el("button", { 
+        class: "btn btn-sm btn-primary", 
+        onclick: async () => {
+          importRowBtn.disabled = true;
+          const original = importRowBtn.textContent;
+          importRowBtn.textContent = "⌛";
+          warn.style.display = "none";
+          try {
+            const mid = typeof memberId === "function" ? memberId() : memberId;
+            if (!mid) { toast("Choose a family member first"); importRowBtn.disabled = false; importRowBtn.textContent = original; return; }
+            
+            const sel = matchSel.value;
+            if (sel === "") {
+              // User chose to skip this row
+              await api(`/results/commit`, {
+                method: "POST",
+                body: {
+                  member_id: mid,
+                  taken_at: dateInput.value,
+                  document_id: doc.id,
+                  items: [],
+                  force: true
+                }
+              });
+              toast("Skipped row");
+              renderReviewDoc(main);
+              return;
+            }
+            
+            let typeId;
+            if (sel === "__new__") {
+              const created = await api("/test-types", { method: "POST", body: {
+                name: item.test_name,
+                canonical_unit: unitInput.value.trim(),
+                ref_low: item.ref_low ?? null,
+                ref_high: item.ref_high ?? null,
+              } });
+              typeId = created.id;
+              await loadCore();
+            } else {
+              typeId = Number(sel);
+            }
+            
+            const commitItem = isQual ? {
+              test_type_id: typeId,
+              value: null,
+              value_text: valInput.value.trim(),
+              unit: "",
+              flag: flagInput.value.trim() || null,
+              note: null,
+              document_item_id: item.id
+            } : {
+              test_type_id: typeId,
+              value: Number(valInput.value),
+              unit: unitInput.value.trim(),
+              qualifier: item.qualifier ?? null,
+              ref_low: item.ref_low ?? null,
+              ref_high: item.ref_high ?? null,
+              note: null,
+              document_item_id: item.id
+            };
+            
+            await api(`/documents/${doc.id}/items/${item.id}/import`, {
+              method: "POST",
+              body: {
+                member_id: mid,
+                taken_at: dateInput.value,
+                item: commitItem
+              }
+            });
+            toast(`Successfully imported "${item.test_name}"`);
+            renderReviewDoc(main);
+          } catch (err) {
+            warn.textContent = err.message;
+            warn.style.display = "block";
+            importRowBtn.disabled = false;
+            importRowBtn.textContent = original;
+          }
+        }
+      }, "Import");
+      
+      const rowEl = el("div", { class: "review-row", style: "align-items: center;" }, [
+        rowLabel,
+        valInput, unitInput, flagInput,
+        el("div", { style: "display:flex; justify-content:center;" }, importRowBtn),
+      ]);
+      
+      body.append(rowEl, warn);
+      rows.push({ matchSel, valInput, unitInput, flagInput, warn, item, isQual });
+    });
+    
+    const commitBtn = el("button", { class: "btn btn-primary", onclick: async () => {
+      commitBtn.disabled = true;
+      const original = commitBtn.textContent;
+      commitBtn.textContent = "Saving…";
+      try {
+        const items = [];
+        for (const r of rows) {
+          const sel = r.matchSel.value;
+          if (sel === "") continue; // explicitly skipped
+          let typeId;
+          if (sel === "__new__") {
+            const created = await api("/test-types", { method: "POST", body: {
+              name: r.item.test_name,
+              canonical_unit: r.unitInput.value.trim(),
+              ref_low: r.item.ref_low ?? null,
+              ref_high: r.item.ref_high ?? null,
+            } });
+            typeId = created.id;
+          } else {
+            typeId = Number(sel);
+          }
+          items.push(r.isQual ? {
+            test_type_id: typeId,
+            value: null,
+            value_text: r.valInput.value.trim(),
+            unit: "",
+            flag: r.flagInput.value.trim() || null,
+            note: null,
+            document_item_id: r.item.id
+          } : {
+            test_type_id: typeId,
+            value: Number(r.valInput.value),
+            unit: r.unitInput.value.trim(),
+            qualifier: r.item.qualifier ?? null,
             ref_low: r.item.ref_low ?? null,
             ref_high: r.item.ref_high ?? null,
-          } });
-          typeId = created.id;
-        } else {
-          typeId = Number(sel);
+            note: null,
+            document_item_id: r.item.id
+          });
         }
-        items.push(r.isQual ? {
-          test_type_id: typeId,
-          value: null,
-          value_text: r.valInput.value.trim(),
-          unit: "",
-          flag: r.flagInput.value.trim() || null,
-          note: null,
-        } : {
-          test_type_id: typeId,
-          value: Number(r.valInput.value),
-          unit: r.unitInput.value.trim(),
-          qualifier: r.item.qualifier ?? null,
-          ref_low: r.item.ref_low ?? null,
-          ref_high: r.item.ref_high ?? null,
-          note: null,
+        if (!items.length) { toast("Nothing to save — every row is set to skip"); commitBtn.disabled = false; commitBtn.textContent = original; return; }
+        const mid = typeof memberId === "function" ? memberId() : memberId;
+        if (!mid) { toast("Choose a family member first"); commitBtn.disabled = false; commitBtn.textContent = original; return; }
+        const res = await commitResults({
+          member_id: mid, taken_at: dateInput.value, document_id: doc.id, items,
         });
+        if (res.cancelled) { toast("Cancelled — nothing saved"); commitBtn.disabled = false; commitBtn.textContent = original; return; }
+        const nSkip = (res.skipped || []).length;
+        let msg = `Saved ${res.created} result${res.created !== 1 ? "s" : ""}`;
+        if (nSkip) msg += ` · skipped ${nSkip} (${res.skipped[0].reason})`;
+        toast(msg);
+        await loadCore();
+        navigateTo("overview", { activeMember: mid });
+      } catch (e) {
+        toast("Error: " + e.message);
+        commitBtn.disabled = false; commitBtn.textContent = original;
       }
-      if (!items.length) { toast("Nothing to save — every row is set to skip"); return; }
-      const mid = typeof memberId === "function" ? memberId() : memberId;
-      if (!mid) { toast("Choose a family member first"); return; }
-      const res = await commitResults({
-        member_id: mid, taken_at: dateInput.value, document_id: doc.id, items,
-      });
-      if (res.cancelled) { toast("Cancelled — nothing saved"); return; }
-      const nSkip = (res.skipped || []).length;
-      let msg = `Saved ${res.created} result${res.created !== 1 ? "s" : ""}`;
-      if (nSkip) msg += ` · skipped ${nSkip} (${res.skipped[0].reason})`;
-      toast(msg);
-      await loadCore();
-      navigateTo("overview", { activeMember: mid });
-    } catch (e) {
-      toast("Error: " + e.message);
-    } finally {
-      commitBtn.disabled = false; commitBtn.textContent = original;
-    }
-  } }, "Save results");
+    } }, "Save remaining results");
+    
+    needsReviewContent.append(head, body, el("div", { style: "margin-top:16px" }, commitBtn));
+  }
+  
+  // 2. Imported Results Section
+  const importedContent = el("div");
+  if (importedItems.length === 0) {
+    importedContent.append(el("div", { class: "empty", style: "padding: 16px 0;" }, "No items have been imported yet."));
+  } else {
+    const list = el("div", { style: "display: flex; flex-direction: column; gap: 8px;" });
+    importedItems.forEach(it => {
+      const displayVal = it.value !== null ? String(it.value) : (it.value_text || "");
+      list.append(el("div", { 
+        style: "display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: var(--page-tint); border-radius: var(--radius-sm);" 
+      }, [
+        el("span", { style: "font-weight: 600;" }, it.test_name),
+        el("div", {}, [
+          el("span", { style: "margin-right: 8px;" }, `${displayVal} ${it.unit || ""}`),
+          it.flag ? el("span", { class: "pill pill-H" }, it.flag) : el("span", { class: "pill pill-ok" }, "Normal")
+        ])
+      ]));
+    });
+    importedContent.append(list);
+  }
+  
+  // 3. Skipped / Failed Section
+  const skippedContent = el("div");
+  if (skippedItems.length === 0) {
+    skippedContent.append(el("div", { class: "empty", style: "padding: 16px 0;" }, "No skipped or failed items."));
+  } else {
+    const list = el("div", { style: "display: flex; flex-direction: column; gap: 8px;" });
+    skippedItems.forEach(it => {
+      list.append(el("div", { 
+        style: "display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: var(--page-tint); border-radius: var(--radius-sm);" 
+      }, [
+        el("span", { style: "font-weight: 600; text-decoration: line-through; color: var(--muted);" }, it.test_name),
+        el("span", { style: "font-size: 13px; color: var(--muted);" }, it.error_reason || "User skipped")
+      ]));
+    });
+    skippedContent.append(list);
+  }
+  
+  const colNeedsReview = createCollapsible("Items needing review", needsReviewItems.length, needsReviewContent, true);
+  const colImported = createCollapsible("Successfully imported results", importedItems.length, importedContent, false);
+  const colSkipped = createCollapsible("Skipped or failed items", skippedItems.length, skippedContent, false);
 
-  mount.append(el("div", { class: "card" }, [
+  mount.append(el("div", { class: "card", style: "padding: 16px; margin-bottom: 16px;" }, [
     el("h3", { style: "margin-top:0" }, "Review extracted results"),
     el("p", { class: "page-sub", style: "margin-bottom:6px" }, `From ${result.lab_name || doc.filename}${result.patient_name ? " · patient: " + result.patient_name : ""} · extracted by ${result.provider}/${result.model}`),
     el("p", { class: "page-sub", style: "margin:0 0 14px" }, "Every test is tracked by default. Use a row's dropdown to merge it into an existing test (so units line up on one chart) or skip it."),
-    el("div", { class: "field", style: "max-width:220px" }, [el("label", {}, "Collection date"), dateInput]),
-    head, body,
-    el("div", { style: "margin-top:16px" }, commitBtn),
+    el("div", { class: "field", style: "max-width:220px; margin: 0;" }, [el("label", {}, "Collection date"), dateInput]),
   ]));
+  
+  mount.append(colNeedsReview, colImported, colSkipped);
 }
 
 // Move a whole import (report + its saved results) to another member — for a
@@ -1929,6 +2143,147 @@ async function deleteImport(doc) {
   await loadCore(); render();
 }
 
+// Helper to group documents by month
+function getGroupKey(d) {
+  const dateStr = d.report_date || d.created_at;
+  if (!dateStr) return "Unknown Date";
+  try {
+    const parts = dateStr.split("T")[0].split("-");
+    if (parts.length >= 2) {
+      const year = parts[0];
+      const monthNum = parseInt(parts[1], 10);
+      const months = [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December"
+      ];
+      return `${months[monthNum - 1]} ${year}`;
+    }
+  } catch (e) {}
+  return "Unknown Date";
+}
+
+function renderDocList(container, docs) {
+  container.innerHTML = "";
+  
+  // Filter docs
+  let filtered = docs.filter(d => {
+    // 1. Status filter
+    if (state.docFilter.status && d.status !== state.docFilter.status) {
+      return false;
+    }
+    // 2. Search filter
+    if (state.docFilter.search) {
+      const q = state.docFilter.search.toLowerCase();
+      const filenameMatch = (d.filename || "").toLowerCase().includes(q);
+      const memberMatch = (d.member_name || "").toLowerCase().includes(q);
+      const labMatch = (d.lab_name || "").toLowerCase().includes(q);
+      if (!filenameMatch && !memberMatch && !labMatch) {
+        return false;
+      }
+    }
+    return true;
+  });
+  
+  if (!filtered.length) {
+    container.append(el("div", { class: "empty" }, "No documents match the active filters."));
+    return;
+  }
+  
+  // Group by Month Year
+  const groups = {};
+  filtered.forEach(d => {
+    const key = getGroupKey(d);
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(d);
+  });
+  
+  // Order groups (using the date of the first item in each group to sort groups descending)
+  const groupNames = Object.keys(groups).sort((a, b) => {
+    const dateA = groups[a][0].report_date || groups[a][0].created_at || "";
+    const dateB = groups[b][0].report_date || groups[b][0].created_at || "";
+    return dateB.localeCompare(dateA);
+  });
+  
+  let displayedCount = 0;
+  
+  for (const groupName of groupNames) {
+    const groupDocs = groups[groupName];
+    // Sort documents in the group descending
+    groupDocs.sort((a, b) => {
+      const dateA = a.report_date || a.created_at || "";
+      const dateB = b.report_date || b.created_at || "";
+      return dateB.localeCompare(dateA);
+    });
+    
+    // Only display items up to our pagination limit
+    const toShow = [];
+    for (const d of groupDocs) {
+      if (displayedCount < state.docFilter.limit) {
+        toShow.push(d);
+        displayedCount++;
+      }
+    }
+    
+    if (toShow.length > 0) {
+      const grid = el("div", { class: "docs-grid" });
+      toShow.forEach(d => {
+        const needsReview = d.status === "needs_review";
+        const statusTextMap = {
+          "needs_review": "Needs Review",
+          "fully_imported": "Fully Imported",
+          "partially_imported": "Partially Imported",
+          "failed": "Failed"
+        };
+        const statusPillClass = {
+          "needs_review": "pill-L",
+          "fully_imported": "pill-ok",
+          "partially_imported": "pill-L",
+          "failed": "pill-H"
+        }[d.status] || "pill-L";
+        
+        const cardActions = el("div", { class: "doc-card-actions" }, [
+          needsReview ? el("button", { class: "btn btn-sm btn-primary", onclick: () => openReview(d) }, "Review →") : null,
+          state.members.length > 1 ? el("button", { class: "btn btn-sm", onclick: () => openReassignDoc(d) }, "Reassign") : null,
+          el("a", { class: "btn btn-sm", href: `/api/documents/${d.id}/file`, target: "_blank" }, "Open File"),
+          el("button", { class: "btn btn-sm btn-danger", onclick: () => deleteImport(d) }, "Delete")
+        ].filter(Boolean));
+        
+        grid.append(el("div", { class: "doc-card" }, [
+          el("div", { class: "doc-card-header" }, [
+            el("span", { class: "doc-card-title" }, d.filename),
+            el("span", { class: "pill " + statusPillClass }, statusTextMap[d.status] || d.status)
+          ]),
+          el("div", { class: "doc-card-body" }, [
+            el("div", {}, [el("strong", {}, "Patient: "), d.member_name || "Unassigned"]),
+            el("div", {}, [el("strong", {}, "Date: "), fmtDate(d.report_date || d.created_at)]),
+            el("div", {}, [el("strong", {}, "Lab: "), d.lab_name || "Unknown Lab"]),
+            el("div", {}, [el("strong", {}, "Results: "), `${d.result_count || 0} items`])
+          ]),
+          cardActions
+        ]));
+      });
+      
+      container.append(
+        el("h3", { style: "margin-top: 24px; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 6px;" }, groupName),
+        grid
+      );
+    }
+  }
+  
+  // Show Load More button if there are more filtered items
+  if (filtered.length > state.docFilter.limit) {
+    container.append(el("div", { style: "display: flex; justify-content: center; margin-top: 20px;" }, 
+      el("button", { 
+        class: "btn btn-primary", 
+        onclick: () => {
+          state.docFilter.limit += 15;
+          renderDocList(container, docs);
+        }
+      }, "Load More")
+    ));
+  }
+}
+
 // ---------------- documents ----------------
 async function renderDocuments(main) {
   document.querySelectorAll('[data-view="documents"]').forEach((b) => b.classList.add("active"));
@@ -1936,36 +2291,75 @@ async function renderDocuments(main) {
     el("h1", { class: "page-title" }, "Documents"),
     el("p", { class: "page-sub" }, "Every uploaded report is kept locally as a backup you can reopen anytime."),
   ])));
+  
+  if (!state.docFilter) {
+    state.docFilter = {
+      search: "",
+      status: null,
+      limit: 15
+    };
+  }
+
   const docs = await api("/documents");
   if (!docs.length) { main.append(el("div", { class: "empty" }, "No documents uploaded yet.")); return; }
-  const pending = docs.filter((d) => d.status !== "committed" && d.result_count === 0);
-  if (pending.length) {
-    main.append(el("div", { class: "banner" }, [
-      el("span", {}, `⏳ ${pending.length} report${pending.length > 1 ? "s were" : " was"} uploaded but never saved. Click Review to finish adding ${pending.length > 1 ? "their" : "its"} results.`),
-    ]));
-  }
-  const table = el("table");
-  table.append(el("thead", {}, el("tr", {}, ["File", "Member", "Date", "Results", "Status", ""].map((h) => el("th", {}, h)))));
-  const tb = el("tbody");
-  for (const d of docs) {
-    const needsReview = d.status !== "committed" && d.result_count === 0;
-    const actions = el("div", { style: "display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap" }, [
-      needsReview ? el("button", { class: "btn btn-sm btn-primary", onclick: () => openReview(d) }, "Review →") : null,
-      state.members.length > 1 ? el("button", { class: "btn btn-sm", onclick: () => openReassignDoc(d) }, "Reassign") : null,
-      el("a", { class: "btn btn-sm", href: `/api/documents/${d.id}/file`, target: "_blank" }, "Open"),
-      el("button", { class: "btn btn-sm btn-danger", onclick: () => deleteImport(d) }, "Delete"),
-    ].filter(Boolean));
-    tb.append(el("tr", {}, [
-      el("td", {}, d.filename),
-      el("td", {}, d.member_name || "—"),
-      el("td", {}, fmtDate(d.report_date || d.created_at)),
-      el("td", {}, String(d.result_count)),
-      el("td", {}, el("span", { class: "pill " + (d.status === "committed" ? "pill-ok" : (d.status === "failed" ? "pill-H" : "pill-L")) }, needsReview ? (d.status === "failed" ? "failed" : "needs review") : d.status)),
-      el("td", {}, actions),
-    ]));
-  }
-  table.append(tb);
-  main.append(el("div", { class: "card" }, table));
+  
+  // Status tallies (tabs)
+  const tallies = el("div", { class: "status-tallies" }, [
+    el("button", { 
+      class: "status-tally-btn" + (state.docFilter.status === null ? " active" : ""),
+      onclick: () => { state.docFilter.status = null; state.docFilter.limit = 15; renderDocuments(main); }
+    }, [
+      "All",
+      el("span", { class: "status-tally-count" }, String(docs.length))
+    ]),
+    el("button", { 
+      class: "status-tally-btn" + (state.docFilter.status === "needs_review" ? " active" : ""),
+      onclick: () => { state.docFilter.status = "needs_review"; state.docFilter.limit = 15; renderDocuments(main); }
+    }, [
+      "Needs Review",
+      el("span", { class: "status-tally-count" }, String(docs.filter(d => d.status === 'needs_review').length))
+    ]),
+    el("button", { 
+      class: "status-tally-btn" + (state.docFilter.status === "fully_imported" ? " active" : ""),
+      onclick: () => { state.docFilter.status = "fully_imported"; state.docFilter.limit = 15; renderDocuments(main); }
+    }, [
+      "Fully Imported",
+      el("span", { class: "status-tally-count" }, String(docs.filter(d => d.status === 'fully_imported').length))
+    ]),
+    el("button", { 
+      class: "status-tally-btn" + (state.docFilter.status === "partially_imported" ? " active" : ""),
+      onclick: () => { state.docFilter.status = "partially_imported"; state.docFilter.limit = 15; renderDocuments(main); }
+    }, [
+      "Partially Imported",
+      el("span", { class: "status-tally-count" }, String(docs.filter(d => d.status === 'partially_imported').length))
+    ]),
+    el("button", { 
+      class: "status-tally-btn" + (state.docFilter.status === "failed" ? " active" : ""),
+      onclick: () => { state.docFilter.status = "failed"; state.docFilter.limit = 15; renderDocuments(main); }
+    }, [
+      "Failed",
+      el("span", { class: "status-tally-count" }, String(docs.filter(d => d.status === 'failed').length))
+    ])
+  ]);
+
+  // Search input
+  const searchInput = el("input", {
+    type: "search",
+    placeholder: "Search by file name, patient, or lab...",
+    class: "doc-search-input",
+    value: state.docFilter.search,
+    oninput: (e) => {
+      state.docFilter.search = e.target.value;
+      state.docFilter.limit = 15;
+      renderDocList(listContainer, docs);
+    }
+  });
+  const searchBox = el("div", { class: "doc-search-box" }, searchInput);
+  
+  const listContainer = el("div", { class: "docs-list-container" });
+  
+  main.append(tallies, searchBox, listContainer);
+  renderDocList(listContainer, docs);
 }
 
 // Resume a document that was uploaded/extracted but never committed. Uses the
@@ -2003,7 +2397,7 @@ async function renderReviewDoc(main) {
         try {
           const result = await api(`/documents/${doc.id}/extract`, { method: "POST", body: {} });
           status.innerHTML = "";
-          renderReview(mount, doc, () => Number(memberSel.value), result);
+          renderReview(mount, doc, () => Number(memberSel.value), result, main);
         } catch (e) {
           showExtractButton("Error: " + e.message, true);
         }
@@ -2017,7 +2411,7 @@ async function renderReviewDoc(main) {
     if (result && result.error) {
       showExtractButton("Extraction failed: " + result.error, true);
     } else {
-      renderReview(mount, doc, () => Number(memberSel.value), result);
+      renderReview(mount, doc, () => Number(memberSel.value), result, main);
     }
   } catch (e) {
     // No saved extraction yet (older upload) — offer to run it.
@@ -2191,32 +2585,47 @@ async function renderPrivacyCard() {
 }
 
 // ---------------- settings ----------------
+// ---------------- settings ----------------
 async function renderSettings(main) {
   document.querySelectorAll('[data-view="settings"]').forEach((b) => b.classList.add("active"));
   const s = await api("/settings");
   main.append(el("div", { class: "page-head" }, el("div", {}, [
     el("h1", { class: "page-title" }, "Settings"),
-    el("p", { class: "page-sub" }, "Choose your AI provider and keys. Keys are stored locally in your database and never displayed back."),
+    el("p", { class: "page-sub" }, "Configure AI providers, system prompts, and privacy settings."),
   ])));
 
+  // 1. AI Configuration Collapsible
+  const aiConfigContent = el("div");
+  
   const providerSel = el("select");
   const activeProvider = s.ai_provider || (s.has_key_gemini ? "gemini" : (s.has_key_openai ? "openai" : "anthropic"));
-  for (const p of ["anthropic", "openai", "gemini"]) providerSel.append(el("option", { value: p, ...(activeProvider === p ? { selected: "" } : {}) }, p[0].toUpperCase() + p.slice(1)));
-
+  for (const p of ["anthropic", "openai", "gemini"]) {
+    providerSel.append(el("option", { value: p, ...(activeProvider === p ? { selected: "" } : {}) }, p[0].toUpperCase() + p.slice(1)));
+  }
 
   const fields = {};
-  const mk = (label, key, ph) => {
+  const mk = (label, key, ph, isSet) => {
     const inp = el("input", { type: "text", placeholder: ph });
     fields[key] = inp;
-    return el("div", { class: "field" }, [el("label", {}, label), inp]);
+    
+    const statusText = isSet ? "Set" : "Not Set";
+    const statusClass = isSet ? "pill-ok" : "pill-L";
+    
+    return el("div", { class: "field" }, [
+      el("div", { style: "display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;" }, [
+        el("label", { style: "margin: 0;" }, label),
+        el("span", { class: "pill " + statusClass, style: "font-size: 11px; padding: 2px 6px;" }, statusText)
+      ]),
+      inp
+    ]);
   };
 
-  const card = el("div", { class: "card", style: "max-width:560px" }, [
+  aiConfigContent.append(
     el("div", { class: "field" }, [el("label", {}, "Active provider"), providerSel]),
     el("div", { class: "category-label", style: "margin-top:20px" }, "API Keys"),
-    mk(`Anthropic key ${s.has_key_anthropic ? "✓ set" : ""}`, "ai_key_anthropic", s.has_key_anthropic ? "•••••• (leave blank to keep)" : "sk-ant-..."),
-    mk(`OpenAI key ${s.has_key_openai ? "✓ set" : ""}`, "ai_key_openai", s.has_key_openai ? "•••••• (leave blank to keep)" : "sk-..."),
-    mk(`Gemini key ${s.has_key_gemini ? "✓ set" : ""}`, "ai_key_gemini", s.has_key_gemini ? "•••••• (leave blank to keep)" : "AIza..."),
+    mk("Anthropic key", "ai_key_anthropic", s.has_key_anthropic ? "•••••• (leave blank to keep)" : "sk-ant-...", s.has_key_anthropic),
+    mk("OpenAI key", "ai_key_openai", s.has_key_openai ? "•••••• (leave blank to keep)" : "sk-...", s.has_key_openai),
+    mk("Gemini key", "ai_key_gemini", s.has_key_gemini ? "•••••• (leave blank to keep)" : "AIza...", s.has_key_gemini),
     el("div", { class: "category-label", style: "margin-top:20px" }, "Models (optional overrides)"),
     (() => { const i = el("input", { type: "text", value: s.ai_model_anthropic || "", placeholder: "claude-opus-4-8" }); fields.ai_model_anthropic = i; return el("div", { class: "field" }, [el("label", {}, "Anthropic model"), i]); })(),
     (() => { const i = el("input", { type: "text", value: s.ai_model_openai || "", placeholder: "gpt-4o" }); fields.ai_model_openai = i; return el("div", { class: "field" }, [el("label", {}, "OpenAI model"), i]); })(),
@@ -2227,11 +2636,11 @@ async function renderSettings(main) {
       await api("/settings", { method: "PUT", body });
       toast("Settings saved");
       render();
-    } }, "Save settings"),
-  ]);
-  
+    } }, "Save settings")
+  );
+
   if (s.commit_sha) {
-    card.append(
+    aiConfigContent.append(
       el("div", { style: "margin-top: 24px; padding-top: 14px; border-top: 1px solid var(--border); font-size: 12.5px; color: var(--muted); display: flex; align-items: center; gap: 6px;" }, [
         "Last Deployed Build:",
         el("a", {
@@ -2243,27 +2652,25 @@ async function renderSettings(main) {
     );
   }
 
+  // 2. AI System Prompts Collapsible
+  const promptsContent = el("div");
   const promptsFields = {};
   const mkPrompt = (label, key, value) => {
     const ta = el("textarea", { 
-      style: "width: 100%; height: 160px; font-family: monospace; font-size: 13px; line-height: 1.5; background: var(--panel-2);", 
+      style: "width: 100%; height: 160px; font-family: monospace; font-size: 13px; line-height: 1.5; background: var(--panel-2); margin-top: 4px;", 
       placeholder: "System prompt..." 
     });
     ta.value = value || "";
     promptsFields[key] = ta;
     return el("div", { class: "field", style: "margin-bottom:16px;" }, [
-      el("label", { style: "margin-bottom:6px; font-weight:700;" }, label), 
+      el("label", { style: "font-weight:700;" }, label), 
       ta
     ]);
   };
 
-  const promptsCard = el("div", { class: "card", style: "max-width:560px; margin-top:20px" }, [
-    el("h3", { style: "margin-top:0; margin-bottom:16px;" }, "AI System Prompts"),
-    mkPrompt("Document Extraction Prompt", "prompt_extraction_system", s.prompt_extraction_system),
-    mkPrompt("AI Q&A Assistant Prompt", "prompt_qa_system", s.prompt_qa_system),
-    mkPrompt("Biomarker Explanation (Personalized)", "prompt_biomarker_personalized", s.prompt_biomarker_personalized),
-    mkPrompt("Biomarker Explanation (Standard)", "prompt_biomarker_standard", s.prompt_biomarker_standard),
-    el("button", { class: "btn btn-primary", style: "margin-top:8px", onclick: async () => {
+  const savePromptsBtn = el("button", { class: "btn btn-primary", onclick: async () => {
+    savePromptsBtn.disabled = true;
+    try {
       const body = {};
       for (const [k, ta] of Object.entries(promptsFields)) {
         body[k] = ta.value;
@@ -2271,12 +2678,175 @@ async function renderSettings(main) {
       await api("/settings", { method: "PUT", body });
       toast("AI Prompts saved");
       render();
-    } }, "Save prompts"),
-  ]);
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      savePromptsBtn.disabled = false;
+    }
+  } }, "Save prompts");
 
-  main.append(card);
-  main.append(promptsCard);
-  main.append(await renderPrivacyCard());
+  const resetPromptsBtn = el("button", { class: "btn btn-quiet", style: "margin-left: 8px;", onclick: async () => {
+    if (!window.confirm("Reset all prompts to system defaults? Any custom modifications will be lost.")) return;
+    resetPromptsBtn.disabled = true;
+    try {
+      const defaults = await api("/settings/defaults");
+      for (const [k, value] of Object.entries(defaults)) {
+        if (promptsFields[k]) {
+          promptsFields[k].value = value;
+        }
+      }
+      toast("Prompts reset to defaults (click Save prompts to write to database)");
+    } catch (e) {
+      toast("Failed to reset prompts: " + e.message);
+    } finally {
+      resetPromptsBtn.disabled = false;
+    }
+  } }, "Reset to Defaults");
+
+  promptsContent.append(
+    mkPrompt("Document Extraction Prompt", "prompt_extraction_system", s.prompt_extraction_system),
+    mkPrompt("AI Q&A Assistant Prompt", "prompt_qa_system", s.prompt_qa_system),
+    mkPrompt("Biomarker Explanation (Personalized)", "prompt_biomarker_personalized", s.prompt_biomarker_personalized),
+    mkPrompt("Biomarker Explanation (Standard)", "prompt_biomarker_standard", s.prompt_biomarker_standard),
+    el("div", { style: "display: flex;" }, [savePromptsBtn, resetPromptsBtn])
+  );
+
+  // 3. Privacy & Security Collapsible
+  const privacyContent = el("div");
+  // We can just construct it, but to keep existing renderPrivacyCard intact, we append the generated card's children directly to privacyContent!
+  const privacyCard = await renderPrivacyCard();
+  while (privacyCard.firstChild) {
+    privacyContent.appendChild(privacyCard.firstChild);
+  }
+
+  // 4. Advanced Actions Collapsible
+  const advancedContent = el("div");
+  const categorizeBtn = el("button", { 
+    class: "btn btn-primary",
+    onclick: () => {
+      const otherTests = state.testTypes.filter(t => t.category === "Other" || !t.category);
+      if (otherTests.length === 0) {
+        toast("All tests are already categorized!");
+        return;
+      }
+      
+      const modalBody = el("div", {}, [
+        el("span", { class: "spinner" }), 
+        el("span", { style: "margin-left: 8px;" }, `Analyzing ${otherTests.length} unmatched test${otherTests.length > 1 ? "s" : ""} with AI...`)
+      ]);
+      
+      const modalActions = [
+        el("button", { class: "btn", onclick: closeModal }, "Cancel")
+      ];
+      
+      const modal = openModal("Categorize Unmatched Tests", [modalBody], modalActions);
+      
+      api("/test-types/batch-categorize", {
+        method: "POST",
+        body: { test_names: otherTests.map(t => t.name) }
+      }).then(res => {
+        modalBody.innerHTML = "";
+        
+        if (!res.suggestions || res.suggestions.length === 0) {
+          modalBody.append(el("p", {}, "AI could not suggest any new categories."));
+          return;
+        }
+        
+        modalBody.append(el("p", { class: "page-sub" }, "Review and accept the AI-suggested categories for these tests:"));
+        
+        const tbody = el("tbody");
+        const suggestionRows = [];
+        
+        res.suggestions.forEach(s => {
+          const tt = otherTests.find(t => t.name === s.test_name);
+          if (!tt) return;
+          
+          const cb = el("input", { type: "checkbox", checked: "" });
+          tbody.append(el("tr", {}, [
+            el("td", {}, cb),
+            el("td", {}, s.test_name),
+            el("td", {}, "Other"),
+            el("td", { style: "font-weight: bold; color: var(--good);" }, s.category)
+          ]));
+          
+          suggestionRows.push({
+            checkbox: cb,
+            test_type_id: tt.id,
+            category: s.category,
+            test_name: s.test_name
+          });
+        });
+        
+        const table = el("table", { class: "diff-table" }, [
+          el("thead", {}, el("tr", {}, [
+            el("th", { style: "width: 40px;" }, ""),
+            el("th", {}, "Test Name"),
+            el("th", {}, "Current"),
+            el("th", {}, "Suggested")
+          ])),
+          tbody
+        ]);
+        
+        modalBody.append(table);
+        
+        // Add accept action button
+        const acceptBtn = el("button", { 
+          class: "btn btn-primary", 
+          onclick: async () => {
+            acceptBtn.disabled = true;
+            acceptBtn.textContent = "Saving...";
+            try {
+              let acceptedCount = 0;
+              for (const row of suggestionRows) {
+                if (row.checkbox.checked) {
+                  await api("/test-types/override-category", {
+                    method: "POST",
+                    body: {
+                      test_type_id: row.test_type_id,
+                      category: row.category
+                    }
+                  });
+                  acceptedCount++;
+                }
+              }
+              toast(`Successfully categorized ${acceptedCount} test type${acceptedCount !== 1 ? "s" : ""}`);
+              closeModal();
+              await loadCore();
+              renderSettings(main);
+            } catch (err) {
+              toast("Failed to update categories: " + err.message);
+              acceptBtn.disabled = false;
+              acceptBtn.textContent = "Accept Changes";
+            }
+          }
+        }, "Accept Changes");
+        
+        // Replace actions
+        const actionsContainer = modal.querySelector(".modal-actions");
+        actionsContainer.innerHTML = "";
+        actionsContainer.append(
+          el("button", { class: "btn", onclick: closeModal }, "Cancel"),
+          acceptBtn
+        );
+      }).catch(err => {
+        modalBody.innerHTML = "";
+        modalBody.append(el("div", { class: "warn" }, "AI categorization failed: " + err.message));
+      });
+    }
+  }, "Categorize Unmatched Tests");
+
+  advancedContent.append(
+    el("p", { class: "page-sub", style: "margin-bottom: 12px;" }, "Review uncategorized markers (classified as 'Other') and batch re-classify them into appropriate panels using AI."),
+    categorizeBtn
+  );
+
+  // Wrap all sections in collapsible panels
+  const aiSection = createCollapsible("AI Provider & Key Configuration", 1, aiConfigContent, true);
+  const promptsSection = createCollapsible("AI System Prompts", 4, promptsContent, false);
+  const privacySection = createCollapsible("Privacy & Security", state.access.has_pin ? "Protected" : "Public", privacyContent, false);
+  const advancedSection = createCollapsible("Advanced Actions", "AI Categorization", advancedContent, false);
+
+  main.append(aiSection, promptsSection, privacySection, advancedSection);
 
   // PWA Add to Home Screen card
   if (window.deferredPrompt) {

@@ -59,6 +59,8 @@ def init_db() -> None:
 
         if "zones" not in cols:
             conn.execute("ALTER TABLE test_types ADD COLUMN zones TEXT")
+        if "category_override" not in cols:
+            conn.execute("ALTER TABLE test_types ADD COLUMN category_override TEXT")
         dcols = {r["name"] for r in conn.execute("PRAGMA table_info(documents)")}
         if "extraction" not in dcols:
             conn.execute("ALTER TABLE documents ADD COLUMN extraction TEXT")
@@ -86,8 +88,106 @@ def init_db() -> None:
                 )
         conn.commit()
         _migrate_categories_and_zones(conn)
+        _migrate_document_lifecycle(conn)
     finally:
         conn.close()
+
+
+def _migrate_document_lifecycle(conn) -> None:
+    # Check if we need to migrate.
+    docs = conn.execute("SELECT id, status, extraction FROM documents").fetchall()
+    
+    from .matching import match_test_type
+    from .units import parse_value, to_number
+    
+    test_types_list = [row_to_dict(r) for r in conn.execute("SELECT * FROM test_types").fetchall()]
+    
+    for doc in docs:
+        doc_id = doc["id"]
+        status = doc["status"]
+        extraction = doc["extraction"]
+        
+        # Check if document_items already exist for this document
+        existing_items = conn.execute("SELECT COUNT(*) FROM document_items WHERE document_id = ?", (doc_id,)).fetchone()[0]
+        if existing_items > 0:
+            continue
+            
+        if status == 'committed':
+            # Set to fully_imported
+            conn.execute("UPDATE documents SET status = 'fully_imported' WHERE id = ?", (doc_id,))
+            # Fetch results for this document
+            results = conn.execute("SELECT * FROM results WHERE document_id = ?", (doc_id,)).fetchall()
+            for r in results:
+                # Get test type name
+                tt_row = conn.execute("SELECT name FROM test_types WHERE id = ?", (r["test_type_id"],)).fetchone()
+                tt_name = tt_row["name"] if tt_row else "Unknown Test"
+                # Backpopulate document_items
+                conn.execute(
+                    """INSERT INTO document_items (
+                        document_id, raw_name, raw_value, raw_value_text, raw_unit, raw_qualifier, raw_flag,
+                        raw_ref_low, raw_ref_high, page_number, test_type_id, status, result_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 'imported', ?)""",
+                    (
+                        doc_id,
+                        tt_name,
+                        r["value"],
+                        r["value_text"],
+                        r["unit"],
+                        r["qualifier"],
+                        r["flag"],
+                        r["ref_low"],
+                        r["ref_high"],
+                        r["test_type_id"],
+                        r["id"]
+                    )
+                )
+        elif status == 'extracted':
+            # Set to needs_review
+            conn.execute("UPDATE documents SET status = 'needs_review' WHERE id = ?", (doc_id,))
+            if extraction:
+                try:
+                    data = json.loads(extraction)
+                    results = data.get("results", [])
+                    
+                    for r in results:
+                        name = r.get("test_name")
+                        value, parsed_qual = parse_value(r.get("value"))
+                        qualifier = r.get("qualifier") or parsed_qual
+                        if qualifier not in ("<", ">"):
+                            qualifier = None
+                        unit = (r.get("unit") or "").strip()
+                        value_text = (r.get("value_text") or "").strip() or None
+                        if (value is None and value_text is None) or not name or not str(name).strip():
+                            continue
+                            
+                        ref_low = to_number(r.get("ref_low"))
+                        ref_high = to_number(r.get("ref_high"))
+                        tt = match_test_type(name, test_types_list)
+                        tt_id = tt["id"] if tt else None
+                        
+                        conn.execute(
+                            """INSERT INTO document_items (
+                                document_id, raw_name, raw_value, raw_value_text, raw_unit,
+                                raw_qualifier, raw_flag, raw_ref_low, raw_ref_high, page_number,
+                                test_type_id, status
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'needs_review')""",
+                            (
+                                doc_id,
+                                name,
+                                value,
+                                value_text,
+                                unit,
+                                qualifier,
+                                r.get("flag"),
+                                ref_low,
+                                ref_high,
+                                r.get("page_number") or 1,
+                                tt_id
+                            )
+                        )
+                except Exception as e:
+                    print("Failed migrating legacy extraction:", e)
+        conn.commit()
 
 
 def _rebuild_results_for_qualitative(conn) -> None:
@@ -142,9 +242,12 @@ def _migrate_categories_and_zones(conn) -> None:
     interpretation bands. Idempotent — safe to run on every startup."""
     from .reference import ZONES, categorize
 
-    rows = conn.execute("SELECT id, name, slug, category, zones FROM test_types").fetchall()
+    rows = conn.execute("SELECT id, name, slug, category, zones, category_override FROM test_types").fetchall()
     for r in rows:
-        cat = categorize(r["name"])
+        if r["category_override"]:
+            cat = r["category_override"]
+        else:
+            cat = categorize(r["name"])
         if cat != r["category"]:
             conn.execute("UPDATE test_types SET category = ? WHERE id = ?", (cat, r["id"]))
         # Curated bands are authoritative: sync markers that have them, and clear
