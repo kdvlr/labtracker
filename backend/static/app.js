@@ -12,6 +12,11 @@ const state = {
 state.history = [];
 
 function navigateTo(view, extras = {}) {
+  // Ignore redundant clicks on the current view/member
+  if (state.view === view && (extras.activeMember === undefined || extras.activeMember === state.activeMember)) {
+    return;
+  }
+
   const entry = {
     view: state.view,
     activeMember: state.activeMember,
@@ -23,9 +28,7 @@ function navigateTo(view, extras = {}) {
     _report: state._report ? { ...state._report } : null
   };
   
-  if (!state.history.length || state.history[state.history.length - 1].view !== state.view || state.history[state.history.length - 1].activeMember !== state.activeMember) {
-    state.history.push(entry);
-  }
+  state.history.push(entry);
   
   state.view = view;
   Object.assign(state, extras);
