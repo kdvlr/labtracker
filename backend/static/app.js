@@ -2081,13 +2081,9 @@ function getGroupKey(d) {
 function renderDocList(container, docs) {
   container.innerHTML = "";
   
-  // Filter docs
+  // Filter docs globally by search and patient selection
   let filtered = docs.filter(d => {
-    // 1. Status filter
-    if (state.docFilter.status && d.status !== state.docFilter.status) {
-      return false;
-    }
-    // 2. Search filter
+    // 1. Search filter
     if (state.docFilter.search) {
       const q = state.docFilter.search.toLowerCase();
       const filenameMatch = (d.filename || "").toLowerCase().includes(q);
@@ -2096,7 +2092,7 @@ function renderDocList(container, docs) {
         return false;
       }
     }
-    // 3. Patient filter
+    // 2. Patient filter
     if (state.docFilter.patient) {
       if (state.docFilter.patient === "unassigned") {
         if (d.member_id !== null && d.member_name) return false;
@@ -2112,12 +2108,9 @@ function renderDocList(container, docs) {
     return;
   }
   
-  // Slice to current pagination limit
-  const toShow = filtered.slice(0, state.docFilter.limit);
-  
   // Group by patient
   const groups = {};
-  toShow.forEach(d => {
+  filtered.forEach(d => {
     const key = getGroupKey(d);
     if (!groups[key]) groups[key] = [];
     groups[key].push(d);
@@ -2130,14 +2123,38 @@ function renderDocList(container, docs) {
     return a.localeCompare(b);
   });
   
+  state.docFilter.memberStatus = state.docFilter.memberStatus || {};
+  
   for (const groupName of groupNames) {
-    const groupDocs = groups[groupName];
+    const groupDocsAll = groups[groupName];
+    
+    // Status tallies (tabs) for this specific group
+    const allCount = groupDocsAll.length;
+    const needsReviewCount = groupDocsAll.filter(d => d.status === "needs_review" || d.status === "partially_imported").length;
+    const fullyCount = groupDocsAll.filter(d => d.status === "fully_imported").length;
+    const partiallyCount = groupDocsAll.filter(d => d.status === "partially_imported").length;
+    const failedCount = groupDocsAll.filter(d => d.status === "failed").length;
+    
+    const activeStatus = state.docFilter.memberStatus[groupName] || null;
+    
+    // Filter docs in this group locally by active group status
+    const groupDocsFiltered = groupDocsAll.filter(d => {
+      if (!activeStatus) return true;
+      if (activeStatus === "needs_review") {
+        return d.status === "needs_review" || d.status === "partially_imported";
+      }
+      return d.status === activeStatus;
+    });
+    
     // Sort documents descending by date within the group
-    groupDocs.sort((a, b) => {
+    groupDocsFiltered.sort((a, b) => {
       const dateA = a.report_date || a.created_at || "";
       const dateB = b.report_date || b.created_at || "";
       return dateB.localeCompare(dateA);
     });
+    
+    // Slice to current pagination limit
+    const toShow = groupDocsFiltered.slice(0, state.docFilter.limit);
     
     const table = el("table");
     table.append(el("thead", {}, el("tr", {}, [
@@ -2149,7 +2166,7 @@ function renderDocList(container, docs) {
     ])));
     
     const tbody = el("tbody");
-    groupDocs.forEach(d => {
+    toShow.forEach(d => {
       const needsReview = d.status === "needs_review" || d.status === "partially_imported";
       const statusTextMap = {
         "needs_review": "Needs Review",
@@ -2181,23 +2198,54 @@ function renderDocList(container, docs) {
     });
     table.append(tbody);
     
-    container.append(
-      el("h3", { style: "margin-top: 24px; margin-bottom: 12px; font-family: var(--sans-display);" }, groupName),
-      el("div", { class: "card", style: "padding: 0; overflow-x: auto; margin-bottom: 24px;" }, table)
-    );
-  }
-  
-  // Show Load More button if there are more filtered items
-  if (filtered.length > state.docFilter.limit) {
-    container.append(el("div", { style: "display: flex; justify-content: center; margin-top: 20px;" }, 
-      el("button", { 
-        class: "btn btn-primary", 
-        onclick: () => {
-          state.docFilter.limit += 15;
-          renderDocList(container, docs);
-        }
-      }, "Load More")
-    ));
+    const tallies = el("div", { class: "status-tallies", style: "margin-bottom: 12px; gap: 8px; justify-content: flex-start; flex-wrap: wrap;" }, [
+      el("button", {
+        class: "status-tally-btn" + (activeStatus === null ? " active" : ""),
+        style: "font-size: 13px; padding: 4px 10px;",
+        onclick: () => { state.docFilter.memberStatus[groupName] = null; renderDocList(container, docs); }
+      }, ["All", el("span", { class: "status-tally-count" }, String(allCount))]),
+      el("button", {
+        class: "status-tally-btn" + (activeStatus === "needs_review" ? " active" : ""),
+        style: "font-size: 13px; padding: 4px 10px;",
+        onclick: () => { state.docFilter.memberStatus[groupName] = "needs_review"; renderDocList(container, docs); }
+      }, ["Needs Review", el("span", { class: "status-tally-count" }, String(needsReviewCount))]),
+      el("button", {
+        class: "status-tally-btn" + (activeStatus === "fully_imported" ? " active" : ""),
+        style: "font-size: 13px; padding: 4px 10px;",
+        onclick: () => { state.docFilter.memberStatus[groupName] = "fully_imported"; renderDocList(container, docs); }
+      }, ["Fully Imported", el("span", { class: "status-tally-count" }, String(fullyCount))]),
+      el("button", {
+        class: "status-tally-btn" + (activeStatus === "partially_imported" ? " active" : ""),
+        style: "font-size: 13px; padding: 4px 10px;",
+        onclick: () => { state.docFilter.memberStatus[groupName] = "partially_imported"; renderDocList(container, docs); }
+      }, ["Partially Imported", el("span", { class: "status-tally-count" }, String(partiallyCount))]),
+      el("button", {
+        class: "status-tally-btn" + (activeStatus === "failed" ? " active" : ""),
+        style: "font-size: 13px; padding: 4px 10px;",
+        onclick: () => { state.docFilter.memberStatus[groupName] = "failed"; renderDocList(container, docs); }
+      }, ["Failed", el("span", { class: "status-tally-count" }, String(failedCount))])
+    ]);
+    
+    const groupSection = el("div", { style: "margin-bottom: 32px;" }, [
+      el("h3", { style: "margin-top: 24px; margin-bottom: 8px; font-family: var(--sans-display);" }, groupName),
+      tallies,
+      el("div", { class: "card", style: "padding: 0; overflow-x: auto; margin-bottom: 12px;" }, table)
+    ]);
+    
+    // Show Load More button if there are more filtered items for this group
+    if (groupDocsFiltered.length > toShow.length) {
+      groupSection.append(el("div", { style: "display: flex; justify-content: center; margin-top: 12px;" }, 
+        el("button", { 
+          class: "btn btn-primary btn-sm", 
+          onclick: () => {
+            state.docFilter.limit += 15;
+            renderDocList(container, docs);
+          }
+        }, "Load More")
+      ));
+    }
+    
+    container.append(groupSection);
   }
 }
 
@@ -2214,57 +2262,49 @@ async function renderDocuments(main) {
       search: "",
       patient: "",
       status: null,
-      limit: 15
+      limit: 15,
+      memberStatus: {}
     };
   }
 
   const docs = await api("/documents");
   if (!docs.length) { main.append(el("div", { class: "empty" }, "No documents uploaded yet.")); return; }
   
-  // Status tallies (tabs)
-  const tallies = el("div", { class: "status-tallies" }, [
-    el("button", { 
-      class: "status-tally-btn" + (state.docFilter.status === null ? " active" : ""),
-      onclick: () => { state.docFilter.status = null; state.docFilter.limit = 15; renderDocuments(main); }
+  // Scoped Member Pills (chips) at the top
+  const memberPills = el("div", { class: "status-tallies", style: "margin-bottom: 16px; flex-wrap: wrap; gap: 8px;" }, [
+    el("button", {
+      class: "status-tally-btn" + (state.docFilter.patient === "" ? " active" : ""),
+      onclick: () => { state.docFilter.patient = ""; state.docFilter.limit = 15; renderDocuments(main); }
     }, [
-      "All",
+      "All Patients",
       el("span", { class: "status-tally-count" }, String(docs.length))
     ]),
-    el("button", { 
-      class: "status-tally-btn" + (state.docFilter.status === "needs_review" ? " active" : ""),
-      onclick: () => { state.docFilter.status = "needs_review"; state.docFilter.limit = 15; renderDocuments(main); }
+    el("button", {
+      class: "status-tally-btn" + (state.docFilter.patient === "unassigned" ? " active" : ""),
+      onclick: () => { state.docFilter.patient = "unassigned"; state.docFilter.limit = 15; renderDocuments(main); }
     }, [
-      "Needs Review",
-      el("span", { class: "status-tally-count" }, String(docs.filter(d => d.status === 'needs_review').length))
-    ]),
-    el("button", { 
-      class: "status-tally-btn" + (state.docFilter.status === "fully_imported" ? " active" : ""),
-      onclick: () => { state.docFilter.status = "fully_imported"; state.docFilter.limit = 15; renderDocuments(main); }
-    }, [
-      "Fully Imported",
-      el("span", { class: "status-tally-count" }, String(docs.filter(d => d.status === 'fully_imported').length))
-    ]),
-    el("button", { 
-      class: "status-tally-btn" + (state.docFilter.status === "partially_imported" ? " active" : ""),
-      onclick: () => { state.docFilter.status = "partially_imported"; state.docFilter.limit = 15; renderDocuments(main); }
-    }, [
-      "Partially Imported",
-      el("span", { class: "status-tally-count" }, String(docs.filter(d => d.status === 'partially_imported').length))
-    ]),
-    el("button", { 
-      class: "status-tally-btn" + (state.docFilter.status === "failed" ? " active" : ""),
-      onclick: () => { state.docFilter.status = "failed"; state.docFilter.limit = 15; renderDocuments(main); }
-    }, [
-      "Failed",
-      el("span", { class: "status-tally-count" }, String(docs.filter(d => d.status === 'failed').length))
+      "Unassigned",
+      el("span", { class: "status-tally-count" }, String(docs.filter(d => !d.member_name).length))
     ])
   ]);
+  
+  state.members.forEach(m => {
+    const count = docs.filter(d => d.member_id === m.id).length;
+    memberPills.append(el("button", {
+      class: "status-tally-btn" + (state.docFilter.patient === String(m.id) ? " active" : ""),
+      onclick: () => { state.docFilter.patient = String(m.id); state.docFilter.limit = 15; renderDocuments(main); }
+    }, [
+      m.name,
+      el("span", { class: "status-tally-count" }, String(count))
+    ]));
+  });
 
   // Search input
   const searchInput = el("input", {
     type: "search",
     placeholder: "Search by file name or lab...",
     class: "doc-search-input",
+    style: "flex: 1; margin: 0;",
     value: state.docFilter.search,
     oninput: (e) => {
       state.docFilter.search = e.target.value;
@@ -2273,33 +2313,15 @@ async function renderDocuments(main) {
     }
   });
   
-  // Patient filter dropdown
-  const patientSel = el("select", {
-    class: "doc-patient-filter-select",
-    style: "width: 100%;",
-    onchange: (e) => {
-      state.docFilter.patient = e.target.value;
-      state.docFilter.limit = 15;
-      renderDocList(listContainer, docs);
-    }
-  });
-  patientSel.append(el("option", { value: "" }, "All Patients"));
-  patientSel.append(el("option", { value: "unassigned" }, "Unassigned"));
-  state.members.forEach(m => {
-    patientSel.append(el("option", { value: String(m.id), ...(state.docFilter.patient === String(m.id) ? { selected: "" } : {}) }, m.name));
-  });
-  patientSel.value = state.docFilter.patient;
-  
   const filterRow = el("div", { 
-    style: "display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 20px; align-items: center;" 
+    style: "display: flex; gap: 12px; margin-bottom: 20px; align-items: center;" 
   }, [
-    el("div", { class: "doc-search-box", style: "margin: 0;" }, searchInput),
-    el("div", { class: "field", style: "margin: 0;" }, patientSel)
+    el("div", { class: "doc-search-box", style: "flex: 1; margin: 0;" }, searchInput)
   ]);
   
   const listContainer = el("div", { class: "docs-list-container" });
   
-  main.append(tallies, filterRow, listContainer);
+  main.append(memberPills, filterRow, listContainer);
   renderDocList(listContainer, docs);
 }
 
