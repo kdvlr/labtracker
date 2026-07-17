@@ -57,13 +57,19 @@ def validate_pin_format(pin: str) -> Optional[str]:
 # ---------------- brute-force backoff ----------------
 
 def throttle_check(client: str) -> Optional[int]:
-    """Seconds remaining in lockout, or None when the client may try."""
+    """Seconds remaining in lockout, or None when the client may try. Prunes expired lockouts."""
+    now = time.time()
+    # Prune expired entries to prevent memory leak
+    expired = [k for k, v in list(_fails.items()) if now > v[1]]
+    for k in expired:
+        _fails.pop(k, None)
+
     rec = _fails.get(client)
     if not rec:
         return None
     count, until = rec
-    if count >= _MAX_FAILS and time.time() < until:
-        return int(until - time.time()) + 1
+    if count >= _MAX_FAILS and now < until:
+        return int(until - now) + 1
     return None
 
 

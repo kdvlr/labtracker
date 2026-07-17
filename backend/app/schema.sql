@@ -103,6 +103,7 @@ CREATE TABLE IF NOT EXISTS document_items (
 );
 
 CREATE INDEX IF NOT EXISTS idx_document_items_doc ON document_items(document_id);
+CREATE INDEX IF NOT EXISTS idx_documents_member ON documents(member_id);
 
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
