@@ -2251,6 +2251,7 @@ function renderDocList(container, docs) {
 
 // ---------------- documents ----------------
 async function renderDocuments(main) {
+  main.innerHTML = "";
   document.querySelectorAll('[data-view="documents"]').forEach((b) => b.classList.add("active"));
   main.append(el("div", { class: "page-head" }, el("div", {}, [
     el("h1", { class: "page-title" }, "Documents"),
@@ -2556,8 +2557,8 @@ async function renderPrivacyCard() {
 }
 
 // ---------------- settings ----------------
-// ---------------- settings ----------------
 async function renderSettings(main) {
+  main.innerHTML = "";
   document.querySelectorAll('[data-view="settings"]').forEach((b) => b.classList.add("active"));
   const s = await api("/settings");
   main.append(el("div", { class: "page-head" }, el("div", {}, [
