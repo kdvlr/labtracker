@@ -307,20 +307,57 @@ function unitOptions(t) {
   return [...set];
 }
 
+function askDuplicateDecision(duplicates) {
+  return new Promise((resolve) => {
+    const d = duplicates || [];
+    const listItems = d.map(x => el("li", { style: "margin-bottom: 6px; font-size: 15px; list-style-type: disc;" }, [
+      el("strong", {}, x.name),
+      `: ${fmtNum(x.value)} ${x.unit || ""} on `,
+      el("span", { style: "color: var(--muted); font-weight: 500;" }, fmtDate(x.date))
+    ]));
+    
+    const bodyText = el("div", {}, [
+      el("p", { style: "margin: 0 0 16px; font-size: 16px; line-height: 1.5; color: var(--text-secondary);" }, 
+        `${d.length} of these result${d.length > 1 ? "s are" : " is"} already on file with the same date and value:`
+      ),
+      el("ul", { style: "margin: 0 0 24px; padding-left: 20px;" }, listItems),
+      el("p", { style: "margin: 0; font-size: 15px; font-weight: 600; color: var(--text-primary);" }, "Please choose how you would like to handle these duplicates:")
+    ]);
+
+    const actions = [
+      el("button", { 
+        class: "btn", 
+        onclick: () => { closeModal(); resolve("cancel"); } 
+      }, "Cancel"),
+      el("button", { 
+        class: "btn btn-secondary", 
+        style: "background: var(--panel-2); color: var(--text-primary); border-color: var(--baseline);",
+        onclick: () => { closeModal(); resolve("ignore"); } 
+      }, "Ignore Duplicates"),
+      el("button", { 
+        class: "btn btn-primary", 
+        onclick: () => { closeModal(); resolve("duplicate"); } 
+      }, "Create Duplicates")
+    ];
+
+    openModal("Duplicate Results Found", [bodyText], actions);
+  });
+}
+
 // Commit results, but if the server reports duplicates (same date + value
 // already on file), ask the user before forcing them in. Returns the final
 // commit response, or {cancelled:true} if the user declined the override.
 async function commitResults(body) {
   let res = await api("/results/commit", { method: "POST", body });
   if (res.needs_confirmation) {
-    const d = res.duplicates || [];
-    const preview = d.slice(0, 6).map((x) => `• ${x.name}: ${fmtNum(x.value)} ${x.unit || ""} on ${fmtDate(x.date)}`).join("\n");
-    const more = d.length > 6 ? `\n…and ${d.length - 6} more` : "";
-    const ok = confirm(
-      `${d.length} of these result${d.length > 1 ? "s are" : " is"} already on file with the same date and value:\n\n${preview}${more}\n\nSave anyway and create duplicate${d.length > 1 ? "s" : ""}?`
-    );
-    if (!ok) return { cancelled: true };
-    res = await api("/results/commit", { method: "POST", body: { ...body, force: true } });
+    const decision = await askDuplicateDecision(res.duplicates);
+    if (decision === "cancel") {
+      return { cancelled: true };
+    } else if (decision === "ignore") {
+      res = await api("/results/commit", { method: "POST", body: { ...body, ignore_duplicates: true } });
+    } else if (decision === "duplicate") {
+      res = await api("/results/commit", { method: "POST", body: { ...body, force: true } });
+    }
   }
   return res;
 }

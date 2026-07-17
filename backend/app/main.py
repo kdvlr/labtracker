@@ -822,6 +822,7 @@ class CommitReq(BaseModel):
     # Set true to save even when a result with the same date + value already
     # exists for this member and test (the "save anyway" override).
     force: bool = False
+    ignore_duplicates: bool = False
     items: list[CommitItem]
 
 
@@ -862,8 +863,11 @@ def commit_results(req: CommitReq):
                     "SELECT value_text FROM results WHERE member_id = ? AND test_type_id = ? AND taken_at = ?",
                     (req.member_id, it.test_type_id, req.taken_at),
                 ).fetchall()
-                if any((e["value_text"] or "").strip().lower() == text.lower() for e in existing):
+                is_dup = any((e["value_text"] or "").strip().lower() == text.lower() for e in existing)
+                if is_dup:
                     duplicates.append({"name": tt["name"], "date": req.taken_at, "value": text, "unit": ""})
+                    if req.ignore_duplicates:
+                        continue
                 prepared.append((it, None, None, None, q_flag, None, text))
                 continue
             if it.value is None:
@@ -899,17 +903,20 @@ def commit_results(req: CommitReq):
                 "SELECT value_canonical FROM results WHERE member_id = ? AND test_type_id = ? AND taken_at = ?",
                 (req.member_id, it.test_type_id, req.taken_at),
             ).fetchall()
-            if any(_same_value(e["value_canonical"], canonical) for e in existing):
+            is_dup = any(_same_value(e["value_canonical"], canonical) for e in existing)
+            if is_dup:
                 duplicates.append({
                     "name": tt["name"], "date": req.taken_at,
                     "value": it.value, "unit": it.unit,
                 })
+                if req.ignore_duplicates:
+                    continue
 
             prepared.append((it, canonical, rlow_c, rhigh_c, flag, qualifier, None))
 
-        # Block on duplicates unless the caller explicitly forces the save. Nothing
-        # is written in this case, so the client can safely retry with force=true.
-        if duplicates and not req.force:
+        # Block on duplicates unless the caller explicitly forces the save or ignores duplicates. Nothing
+        # is written in this case, so the client can safely retry with force=true or ignore_duplicates=true.
+        if duplicates and not req.force and not req.ignore_duplicates:
             return {"created": 0, "skipped": skipped, "duplicates": duplicates,
                     "needs_confirmation": True}
 
