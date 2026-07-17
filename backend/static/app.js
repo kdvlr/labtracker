@@ -488,67 +488,7 @@ async function renderOverview(main) {
   paint();
 }
 
-// ---------------- checkup schedule panel ----------------
-const DUE_BADGE = { overdue: ["Overdue", "bad"], due: ["Due", "warn"], ok: ["On track", "ok"] };
 
-function schedulePanel(member, schedules) {
-  const card = el("div", { class: "card sched-card" });
-  card.append(el("div", { class: "sched-head" }, [
-    el("span", { class: "sched-title" }, "🗓 Checkup plan"),
-    el("span", { class: "spacer" }),
-    el("button", { class: "btn btn-sm", onclick: () => openAddSchedule(member) }, "＋ Add reminder"),
-  ]));
-  if (!schedules.length) {
-    card.append(el("div", { class: "sched-empty" },
-      "No recurring checkups yet. Add one (e.g. HbA1c every 3 months) and LabTracker will show when it's due."));
-    return card;
-  }
-  for (const s of schedules) {
-    const [label, cls] = DUE_BADGE[s.due_status] || ["—", "na"];
-    card.append(el("div", { class: "sched-row" }, [
-      el("span", { class: "sched-name" }, s.test_name),
-      el("span", { class: "sched-meta" }, [
-        `every ${s.interval_months} month${s.interval_months > 1 ? "s" : ""}`,
-        s.last_at ? `last ${fmtDate(s.last_at)}` : "never tested",
-        s.next_due ? `next ${fmtDate(s.next_due)}` : null,
-        s.note || null,
-      ].filter(Boolean).join(" · ")),
-      el("span", { class: "spacer" }),
-      el("span", { class: "status-badge " + cls }, s.due_status === "due" && !s.last_at ? "Due — no data yet" : label),
-      el("button", { class: "btn btn-sm btn-danger", onclick: async () => {
-        if (confirm(`Remove the ${s.test_name} reminder?`)) { await api(`/schedules/${s.id}`, { method: "DELETE" }); render(); }
-      } }, "✕"),
-    ]));
-  }
-  return card;
-}
-
-function openAddSchedule(member, presetTypeId) {
-  const typeSel = el("select");
-  const types = [...state.testTypes].sort((a, b) => a.name.localeCompare(b.name));
-  for (const t of types) typeSel.append(el("option", { value: t.id, ...(t.id === presetTypeId ? { selected: "" } : {}) }, t.name));
-  const intervalSel = el("select", {}, [
-    [1, "Every month"], [2, "Every 2 months"], [3, "Every 3 months"],
-    [6, "Every 6 months"], [12, "Every year"], [24, "Every 2 years"],
-  ].map(([v, l]) => el("option", { value: v, ...(v === 6 ? { selected: "" } : {}) }, l)));
-  const note = el("input", { type: "text", placeholder: "Optional note, e.g. ordered by Dr. Rao" });
-  openModal(`Checkup reminder for ${member.name}`, [
-    el("p", { class: "page-sub", style: "margin:0 0 14px" }, "LabTracker flags it on the dashboard when the next test is due."),
-    el("div", { class: "field" }, [el("label", {}, "Test"), typeSel]),
-    el("div", { class: "field" }, [el("label", {}, "How often"), intervalSel]),
-    el("div", { class: "field" }, [el("label", {}, "Note"), note]),
-  ], [
-    el("button", { class: "btn", onclick: closeModal }, "Cancel"),
-    el("button", { class: "btn btn-primary", onclick: async () => {
-      await api("/schedules", { method: "POST", body: {
-        member_id: member.id, test_type_id: Number(typeSel.value),
-        interval_months: Number(intervalSel.value), note: note.value.trim() || null,
-      } });
-      toast("Reminder saved");
-      closeModal(); render();
-    } }, "Save"),
-  ]);
-}
 
 // ---------------- member edit ----------------
 const MEMBER_PALETTE = ["#2a78d6", "#1baf7a", "#eda100", "#e34948", "#4a3aa7", "#e87ba4", "#eb6834"];
@@ -856,7 +796,6 @@ async function renderDetail(main) {
     ]),
     el("div", { class: "head-actions", style: "align-items:flex-end" }, [
       el("button", { class: "btn", onclick: () => openQuickAdd(member, t) }, "＋ Add result"),
-      el("button", { class: "btn", onclick: () => openAddSchedule(member, t.id) }, "🗓 Remind me"),
       unitToggle(t),
     ]),
   ]));
