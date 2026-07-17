@@ -1425,13 +1425,57 @@ function renderUpload(main) {
   const status = el("div", { style: "margin-top:12px" });
   const reviewMount = el("div", { style: "margin-top:20px" });
 
+  const pasteInput = el("input", {
+    type: "text",
+    placeholder: "Tap here to paste copied file...",
+    style: "width: 100%; padding: 12px 16px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--panel); text-align: center; font-size: 15px; font-weight: 500; caret-color: transparent;"
+  });
+
+  pasteInput.addEventListener("paste", (e) => {
+    e.preventDefault();
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.kind === "file") {
+        const file = item.getAsFile();
+        if (file) {
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          fileInput.files = dt.files;
+          
+          let name = file.name || "";
+          if (!name) {
+            const ext = file.type.split("/")[1] || "png";
+            name = `clipboard_paste_${new Date().toISOString().slice(0, 10)}.${ext}`;
+          }
+          
+          pasteInput.value = `📋 Attached: ${name}`;
+          toast("File pasted successfully!");
+          return;
+        }
+      }
+    }
+    toast("No image or PDF file found in clipboard");
+  });
+
+  fileInput.addEventListener("change", () => {
+    if (fileInput.files[0]) {
+      pasteInput.value = "";
+    }
+  });
+
   const card = el("div", { class: "card" }, [
     el("div", { class: "row" }, [
       el("div", { class: "field" }, [el("label", {}, "Family member"), memberSel]),
-      el("div", { class: "field" }, [el("label", {}, "Lab report file"), fileInput]),
+      el("div", { class: "field" }, [el("label", {}, "Choose report file"), fileInput]),
+    ]),
+    el("div", { style: "text-align: center; margin: 10px 0 16px; color: var(--muted); font-size: 13.5px; font-weight: 600;" }, "— OR —"),
+    el("div", { class: "field", style: "margin-bottom: 20px;" }, [
+      el("label", {}, "Paste report from clipboard (iOS/Mac/Windows)"),
+      pasteInput
     ]),
     el("button", { class: "btn btn-primary", onclick: async () => {
-      if (!fileInput.files[0]) return toast("Choose a file first");
+      if (!fileInput.files[0]) return toast("Choose or paste a file first");
       if (!memberSel.value) return toast("Add a family member first");
       status.innerHTML = ""; reviewMount.innerHTML = "";
       status.append(el("span", {}, [el("span", { class: "spinner" }), " Uploading…"]));
