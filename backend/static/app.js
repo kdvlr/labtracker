@@ -154,72 +154,9 @@ function miniSpark(values, flag) {
 }
 
 // ---------------- theme ----------------
-const mqDark = matchMedia("(prefers-color-scheme: dark)");
-const effectiveTheme = () => document.documentElement.getAttribute("data-theme") || "light";
-
-function applyTheme(theme) {
-  if (theme) {
-    document.documentElement.setAttribute("data-theme", theme);
-  } else {
-    document.documentElement.removeAttribute("data-theme");
-  }
-
-  // Manage glass background blobs
-  let blobs = $(".glass-bg-blobs");
-  if (theme === "glass") {
-    document.body.classList.add("glass-bg-active");
-    if (!blobs) {
-      blobs = el("div", { class: "glass-bg-blobs no-print" }, [
-        el("div", { class: "blob blob1" }),
-        el("div", { class: "blob blob2" }),
-        el("div", { class: "blob blob3" }),
-      ]);
-      document.body.prepend(blobs);
-    }
-  } else {
-    document.body.classList.remove("glass-bg-active");
-    if (blobs) blobs.remove();
-  }
-
-  const btn = $("#theme-toggle");
-  if (btn) {
-    const eff = theme || (mqDark.matches ? "dark" : "light");
-    if (eff === "glass") {
-      btn.querySelector(".ico").textContent = "🧪";
-      btn.querySelector(".lbl").textContent = "Light mode";
-    } else if (eff === "dark") {
-      btn.querySelector(".ico").textContent = "✨";
-      btn.querySelector(".lbl").textContent = "Liquid Glass";
-    } else {
-      btn.querySelector(".ico").textContent = "🌙";
-      btn.querySelector(".lbl").textContent = "Dark mode";
-    }
-  }
-}
-
-function toggleTheme() {
-  const cur = document.documentElement.getAttribute("data-theme") || (mqDark.matches ? "dark" : "light");
-  let next = "light";
-  if (cur === "light") next = "dark";
-  else if (cur === "dark") next = "glass";
-  else if (cur === "glass") next = "light";
-
-  try { localStorage.setItem("labtracker-theme", next); } catch {}
-  applyTheme(next);
-}
-
 function initTheme() {
-  let saved = null;
-  try { saved = localStorage.getItem("labtracker-theme"); } catch {}
-  if (!saved) {
-    saved = mqDark.matches ? "dark" : "light";
-  }
-  applyTheme(saved);
-  mqDark.addEventListener("change", () => {
-    if (!localStorage.getItem("labtracker-theme")) {
-      applyTheme(mqDark.matches ? "dark" : "light");
-    }
-  });
+  try { localStorage.removeItem("labtracker-theme"); } catch {}
+  document.documentElement.removeAttribute("data-theme");
 }
 
 // A "nice" axis step (1/2/2.5/5/10 x10^n) so ticks land on round numbers
@@ -1888,7 +1825,6 @@ function openAddMember() {
 
 // ---------------- boot ----------------
 initTheme();
-$("#theme-toggle").addEventListener("click", toggleTheme);
 document.querySelectorAll(".nav-btn").forEach((b) => b.addEventListener("click", () => { navigateTo(b.dataset.view); }));
 $("#add-member").addEventListener("click", openAddMember);
 
