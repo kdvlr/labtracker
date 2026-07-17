@@ -1485,12 +1485,12 @@ function renderUpload(main) {
       return;
     }
 
-    let clipDesc = "empty or unknown format";
+    let clipDesc = "";
     if (e.clipboardData) {
       const types = Array.from(e.clipboardData.types || []);
-      if (types.length > 0) clipDesc = types.join(", ");
+      if (types.length > 0) clipDesc = ` (contains: ${types.join(", ")})`;
     }
-    toast(`No file found in clipboard (contains: ${clipDesc}). Please copy the actual file or screenshot first.`);
+    toast(`No file found in clipboard${clipDesc}. Tip: To copy a PDF from WhatsApp on iOS, open the PDF inside WhatsApp, tap the Share icon, select 'Copy' from the system share sheet, then paste it here.`);
   });
 
   fileInput.addEventListener("change", () => {
