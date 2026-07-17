@@ -7,6 +7,7 @@ const state = {
   search: "",
   collapsed: {},
   statusFilter: null,
+  access: { has_pin: false, unlocked: false },
 };
 
 state.history = [];
@@ -67,9 +68,19 @@ const el = (tag, props = {}, children = []) => {
   return n;
 };
 
+// A device that has entered the private PIN keeps that token in localStorage
+// and resends it forever — this is the whole "no login" mechanism.
+const UNLOCK_KEY = "rc-unlock-token";
+const getUnlockToken = () => { try { return localStorage.getItem(UNLOCK_KEY); } catch { return null; } };
+const setUnlockToken = (t) => { try { t ? localStorage.setItem(UNLOCK_KEY, t) : localStorage.removeItem(UNLOCK_KEY); } catch {} };
+
 async function api(path, opts = {}) {
+  const tok = getUnlockToken();
   const res = await fetch("/api" + path, {
-    headers: opts.body && !(opts.body instanceof FormData) ? { "Content-Type": "application/json" } : {},
+    headers: {
+      ...(opts.body && !(opts.body instanceof FormData) ? { "Content-Type": "application/json" } : {}),
+      ...(tok ? { "X-Unlock": tok } : {}),
+    },
     ...opts,
     body: opts.body && !(opts.body instanceof FormData) ? JSON.stringify(opts.body) : opts.body,
   });
@@ -88,6 +99,10 @@ function toast(msg) {
   clearTimeout(toast._t);
   toast._t = setTimeout(() => t.classList.remove("show"), 2600);
 }
+
+// Charts render into an SVG viewBox; on a phone that box is scaled down, so the
+// chart picks a narrower geometry rather than shrinking its own labels.
+const isNarrow = () => window.matchMedia("(max-width: 860px)").matches;
 
 const fmtNum = (n) => (n == null ? "—" : Number(n).toLocaleString(undefined, { maximumFractionDigits: 3 }));
 // A non-detect ("<0.01") must never render as a bare measurement — keep the
@@ -153,11 +168,6 @@ function miniSpark(values, flag) {
   return svg;
 }
 
-// ---------------- theme ----------------
-function initTheme() {
-  try { localStorage.removeItem("labtracker-theme"); } catch {}
-  document.documentElement.removeAttribute("data-theme");
-}
 
 // A "nice" axis step (1/2/2.5/5/10 x10^n) so ticks land on round numbers
 // instead of arbitrary fractions of the data range (120.96, 114.48, …).
@@ -179,7 +189,12 @@ const fmtTick = (v, dec) => Number(v).toLocaleString(undefined, { minimumFractio
 
 function trendChart(points, opts) {
   // opts: { unit, zones (canonical), convert }
-  const W = 720, H = 300, m = { t: 24, r: 64, b: 34, l: 58 };
+  // On a phone the SVG is scaled down to fit, which shrinks its text with it —
+  // a 720-wide chart squeezed onto a 360px screen renders 13px labels at ~7px.
+  // Use a viewBox close to the real width there so the type stays readable.
+  const narrow = isNarrow();
+  const W = narrow ? 330 : 720, H = narrow ? 250 : 300;
+  const m = narrow ? { t: 22, r: 46, b: 30, l: 46 } : { t: 24, r: 64, b: 34, l: 58 };
   const iw = W - m.l - m.r, ih = H - m.t - m.b;
   const conv = opts.convert;
   const vals = points.map((p) => conv(p.value_canonical));
@@ -213,7 +228,7 @@ function trendChart(points, opts) {
   const ys = (v) => m.t + ih - ((v - lo) / span) * ih;
   const clampY = (y) => Math.max(m.t, Math.min(m.t + ih, y));
 
-  const svg = svgNode("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, style: "max-width:100%" });
+  const svg = svgNode("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, style: "max-width:100%;height:auto;display:block" });
 
   // Zone bands — the same green / amber / red story as the range bar.
   if (dz) {
@@ -241,9 +256,11 @@ function trendChart(points, opts) {
   }
   svg.append(svgNode("line", { x1: m.l, x2: m.l + iw, y1: m.t + ih, y2: m.t + ih, class: "axis-line" }));
 
-  // unit caption, so the scale is readable without the legend
+  // unit caption, so the scale is readable without the legend. Anchored to the
+  // left edge — right-anchoring it to the axis pushed longer units (mg/dL) off
+  // the canvas once the margins tightened on phones.
   if (opts.unit) {
-    const u = svgNode("text", { x: m.l - 8, y: m.t - 9, "text-anchor": "end", class: "tick axis-unit" });
+    const u = svgNode("text", { x: 1, y: m.t - 9, "text-anchor": "start", class: "tick axis-unit" });
     u.textContent = opts.unit;
     svg.append(u);
   }
@@ -310,37 +327,40 @@ function unitOptions(t) {
 function askDuplicateDecision(duplicates) {
   return new Promise((resolve) => {
     const d = duplicates || [];
-    const listItems = d.map(x => el("li", { style: "margin-bottom: 6px; font-size: 15px; list-style-type: disc;" }, [
+    const listItems = d.map(x => el("li", {}, [
       el("strong", {}, x.name),
       `: ${fmtNum(x.value)} ${x.unit || ""} on `,
-      el("span", { style: "color: var(--muted); font-weight: 500;" }, fmtDate(x.date))
+      el("span", { class: "muted-inline" }, fmtDate(x.date))
     ]));
     
     const bodyText = el("div", {}, [
-      el("p", { style: "margin: 0 0 16px; font-size: 16px; line-height: 1.5; color: var(--text-secondary);" }, 
-        `${d.length} of these result${d.length > 1 ? "s are" : " is"} already on file with the same date and value:`
+      el("p", { class: "modal-lead" },
+        `${d.length} result${d.length > 1 ? "s are" : " is"} already saved with the same date and value:`
       ),
-      el("ul", { style: "margin: 0 0 24px; padding-left: 20px;" }, listItems),
-      el("p", { style: "margin: 0; font-size: 15px; font-weight: 600; color: var(--text-primary);" }, "Please choose how you would like to handle these duplicates:")
+      el("ul", { class: "modal-list" }, listItems),
+      el("p", { class: "modal-lead" }, d.length > 1
+        ? "You can skip them and save only the new results."
+        : "You can skip it and save only the new results."),
     ]);
 
+    // The safe action is the primary one and is what Enter/tap lands on. Saving a
+    // second copy is possible but has to be chosen deliberately.
     const actions = [
-      el("button", { 
-        class: "btn", 
-        onclick: () => { closeModal(); resolve("cancel"); } 
+      el("button", {
+        class: "btn btn-quiet",
+        onclick: () => { closeModal(); resolve("cancel"); }
       }, "Cancel"),
-      el("button", { 
-        class: "btn btn-secondary", 
-        style: "background: var(--panel-2); color: var(--text-primary); border-color: var(--baseline);",
-        onclick: () => { closeModal(); resolve("ignore"); } 
-      }, "Ignore Duplicates"),
-      el("button", { 
-        class: "btn btn-primary", 
-        onclick: () => { closeModal(); resolve("duplicate"); } 
-      }, "Create Duplicates")
+      el("button", {
+        class: "btn btn-quiet",
+        onclick: () => { closeModal(); resolve("duplicate"); }
+      }, "Save a second copy"),
+      el("button", {
+        class: "btn btn-primary",
+        onclick: () => { closeModal(); resolve("ignore"); }
+      }, `Skip ${d.length > 1 ? "duplicates" : "duplicate"} and save the rest`),
     ];
 
-    openModal("Duplicate Results Found", [bodyText], actions);
+    openModal("Some results are already saved", [bodyText], actions);
   });
 }
 
@@ -364,8 +384,15 @@ async function commitResults(body) {
 
 // ---------------- data loading ----------------
 async function loadCore() {
-  [state.members, state.testTypes] = await Promise.all([api("/members"), api("/test-types")]);
-  if (!state.activeMember && state.members.length) state.activeMember = state.members[0].id;
+  [state.members, state.testTypes, state.access] = await Promise.all([
+    api("/members"), api("/test-types"), api("/access"),
+  ]);
+  // If the active member just disappeared (e.g. this device locked, or someone
+  // else's device never had the PIN), fall back to the first visible member
+  // rather than showing an empty page for a member that no longer resolves.
+  if (!state.members.some((m) => m.id === state.activeMember)) {
+    state.activeMember = state.members[0]?.id || null;
+  }
 }
 
 // ---------------- rendering ----------------
@@ -383,8 +410,26 @@ function renderSidebar() {
   }
 }
 
+// A single quiet chip, present only once a PIN exists anywhere in the household
+// — never shown on a fresh install, so a device that will never unlock (a
+// parent's phone) sees nothing extra at all until the day someone sets one up,
+// and even then it's a one-line "Unlock" toggle, not a login wall.
+function renderLockChip() {
+  let chip = document.getElementById("lock-chip");
+  if (!state.access.has_pin) { chip?.remove(); return; }
+  if (!chip) {
+    chip = el("button", { id: "lock-chip", class: "lock-chip" });
+    document.body.append(chip);
+  }
+  const locked = !state.access.unlocked;
+  chip.className = "lock-chip" + (locked ? "" : " on");
+  chip.textContent = locked ? "🔒 Unlock" : "🔓 Lock";
+  chip.onclick = locked ? openUnlockModal : lockDevice;
+}
+
 function render() {
   renderSidebar();
+  renderLockChip();
   const main = $("#main");
   main.innerHTML = "";
   document.querySelectorAll(".nav-btn").forEach((b) => b.classList.remove("active"));
@@ -511,6 +556,53 @@ async function renderOverview(main) {
 // ---------------- member edit ----------------
 const MEMBER_PALETTE = ["#2a78d6", "#1baf7a", "#eda100", "#e34948", "#4a3aa7", "#e87ba4", "#eb6834"];
 
+// ---------------- private profiles: unlock / lock ----------------
+// Nothing here is shown to a device that has never unlocked and has no reason
+// to: the lock affordance only appears once a PIN exists at all, and even then
+// it's a single quiet icon, not a login wall.
+function openUnlockModal() {
+  const pin = el("input", {
+    type: "password", inputmode: "numeric", pattern: "[0-9]*", maxlength: "8",
+    placeholder: "PIN", autocomplete: "off",
+  });
+  const err = el("p", { class: "modal-lead", style: "color:var(--high);display:none" });
+  const submit = async () => {
+    const v = pin.value.trim();
+    if (!v) return;
+    try {
+      const res = await api("/unlock", { method: "POST", body: { pin: v } });
+      setUnlockToken(res.token);
+      closeModal();
+      await loadCore();
+      render();
+      toast("Unlocked");
+    } catch (e) {
+      err.textContent = e.message || "Incorrect PIN";
+      err.style.display = "";
+      pin.value = ""; pin.focus();
+    }
+  };
+  pin.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+  openModal("Enter PIN", [
+    el("p", { class: "modal-lead" }, "Enter the PIN to see private profiles on this device."),
+    el("div", { class: "field" }, pin),
+    err,
+  ], [
+    el("button", { class: "btn btn-quiet", onclick: closeModal }, "Cancel"),
+    el("button", { class: "btn btn-primary", onclick: submit }, "Unlock"),
+  ]);
+  setTimeout(() => pin.focus(), 50);
+}
+
+async function lockDevice() {
+  await api("/lock", { method: "POST" }).catch(() => {});
+  setUnlockToken(null);
+  await loadCore();
+  if (state.view !== "household" && state.view !== "settings") navigateTo("household");
+  else render();
+  toast("Locked");
+}
+
 function openEditMember(member) {
   const name = el("input", { type: "text", value: member.name });
   const dob = el("input", { type: "date", value: member.dob || "" });
@@ -526,6 +618,17 @@ function openEditMember(member) {
     } });
     swatches.append(b);
   }
+  // Only offer the private toggle when this device could actually act on it —
+  // otherwise checking it would just 403. Setting up privacy in the first
+  // place happens from Settings, where the PIN gets created.
+  const canTogglePrivate = state.access.unlocked || !state.access.has_pin;
+  let priv = !!member.private;
+  const privField = canTogglePrivate ? el("div", { class: "field" }, [
+    el("label", { class: "check-row" }, [
+      el("input", { type: "checkbox", ...(priv ? { checked: "" } : {}), onchange: (e) => { priv = e.target.checked; } }),
+      " Private — hidden unless the PIN is entered on this device",
+    ]),
+  ]) : null;
   openModal(`Edit ${member.name}`, [
     el("div", { class: "field" }, [el("label", {}, "Name"), name]),
     el("div", { class: "row" }, [
@@ -533,7 +636,8 @@ function openEditMember(member) {
       el("div", { class: "field" }, [el("label", {}, "Sex"), sex]),
     ]),
     el("div", { class: "field" }, [el("label", {}, "Color"), swatches]),
-  ], [
+    privField,
+  ].filter(Boolean), [
     el("button", { class: "btn btn-danger", style: "margin-right:auto", onclick: async () => {
       if (confirm(`Delete ${member.name} and ALL their results? This cannot be undone.`)) {
         await api(`/members/${member.id}`, { method: "DELETE" });
@@ -548,6 +652,7 @@ function openEditMember(member) {
       if (!name.value.trim()) return toast("Name required");
       await api(`/members/${member.id}`, { method: "PUT", body: {
         name: name.value.trim(), dob: dob.value || null, sex: sex.value || null, color,
+        ...(canTogglePrivate ? { private: priv } : {}),
       } });
       await loadCore(); closeModal(); render();
       toast("Saved");
@@ -1168,7 +1273,9 @@ function familySection(t, displayUnit, convert) {
 }
 
 function multiTrendChart(series, opts) {
-  const W = 720, H = 320, m = { t: 16, r: 20, b: 34, l: 52 };
+  const narrow = isNarrow();
+  const W = narrow ? 330 : 720, H = narrow ? 260 : 320;
+  const m = narrow ? { t: 14, r: 16, b: 30, l: 44 } : { t: 16, r: 20, b: 34, l: 52 };
   const iw = W - m.l - m.r, ih = H - m.t - m.b;
   const conv = opts.convert;
   const all = series.flatMap((s) => s.points);
@@ -1191,7 +1298,7 @@ function multiTrendChart(series, opts) {
   const xs = (t) => m.l + (tspan === 1 && tmax === tmin ? iw / 2 : ((t - tmin) / tspan) * iw);
   const ys = (v) => m.t + ih - ((v - lo) / span) * ih;
 
-  const svg = svgNode("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, style: "max-width:100%" });
+  const svg = svgNode("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, style: "max-width:100%;height:auto;display:block" });
 
   if (opts.refLow != null || opts.refHigh != null) {
     const yTop = ys(opts.refHigh != null ? conv(opts.refHigh) : hi);
@@ -1697,7 +1804,7 @@ async function renderReport(main) {
     `${summary.length} biomarkers on file`,
   ].filter(Boolean).join(" · ");
   rep.append(
-    el("div", { class: "report-brand" }, "🧪 LabTracker · Health summary"),
+    el("div", { class: "report-brand" }, "🩸 Rakta Charitra · Health summary"),
     el("h1", { class: "page-title", style: "font-size:26px" }, member.name),
     el("p", { class: "page-sub", style: "margin-bottom:8px" }, meta),
   );
@@ -1741,6 +1848,91 @@ async function renderReport(main) {
   rep.append(el("div", { class: "report-footer" },
     "Values shown in each biomarker's canonical unit; reference ranges are from the most recent lab report when available, otherwise catalog defaults. Personal record only — not medical advice."));
   main.append(rep);
+}
+
+// ---------------- privacy: PIN + which profiles are private ----------------
+async function renderPrivacyCard() {
+  const card = el("div", { class: "card", style: "max-width:560px; margin-top:20px" });
+  card.append(
+    el("h3", { style: "margin-top:0" }, "Privacy"),
+    el("p", { class: "modal-lead" },
+      "Profiles are visible to everyone using this app by default — no PIN, no sign-in. " +
+      "Mark a profile Private below to hide it until the PIN is entered on a device."),
+  );
+
+  const pinFields = (labelText, showConfirm) => {
+    const pin = el("input", { type: "password", inputmode: "numeric", pattern: "[0-9]*", maxlength: "8", placeholder: "New PIN (4–8 digits)" });
+    const confirm = showConfirm ? el("input", { type: "password", inputmode: "numeric", pattern: "[0-9]*", maxlength: "8", placeholder: "Confirm PIN" }) : null;
+    const wrap = el("div", { class: "field" }, [el("label", {}, labelText), pin, confirm].filter(Boolean));
+    return { wrap, pin, confirm };
+  };
+
+  if (!state.access.has_pin) {
+    const { wrap, pin, confirm } = pinFields("Set a PIN to enable private profiles", true);
+    card.append(wrap, el("button", { class: "btn btn-primary", onclick: async () => {
+      if (pin.value !== confirm.value) return toast("PINs don't match");
+      try {
+        await api("/access/pin", { method: "PUT", body: { new_pin: pin.value } });
+        // Set it, then unlock immediately with the same PIN so the person who
+        // just created it isn't asked to retype it a second later.
+        const res = await api("/unlock", { method: "POST", body: { pin: pin.value } });
+        setUnlockToken(res.token);
+        await loadCore(); render();
+        toast("PIN set — you're unlocked on this device");
+      } catch (e) { toast(e.message); }
+    } }, "Set PIN"));
+    return card;
+  }
+
+  if (!state.access.unlocked) {
+    card.append(
+      el("p", { class: "modal-lead" }, "Enter the PIN to change privacy settings on this device."),
+      el("button", { class: "btn btn-primary", onclick: openUnlockModal }, "Enter PIN"),
+    );
+    return card;
+  }
+
+  // Unlocked: manage who's private, and change or remove the PIN.
+  const list = el("div", { style: "display:flex; flex-direction:column; gap:2px; margin:14px 0 20px" });
+  for (const m of state.members) {
+    const cb = el("input", { type: "checkbox", ...(m.private ? { checked: "" } : {}) });
+    cb.addEventListener("change", async () => {
+      cb.disabled = true;
+      try {
+        await api(`/members/${m.id}`, { method: "PUT", body: {
+          name: m.name, dob: m.dob, sex: m.sex, color: m.color, private: cb.checked,
+        } });
+        await loadCore();
+        toast(cb.checked ? `${m.name} is now private` : `${m.name} is now visible to everyone`);
+      } catch (e) { cb.checked = !cb.checked; toast(e.message); }
+      cb.disabled = false;
+    });
+    list.append(el("label", { class: "check-row", style: "padding:6px 2px" }, [cb, m.name]));
+  }
+  card.append(el("div", { class: "category-label", style: "margin-top:20px" }, "Private profiles"), list);
+
+  const { wrap, pin, confirm } = pinFields("Change PIN", true);
+  card.append(wrap, el("div", { class: "row", style: "gap:10px" }, [
+    el("button", { class: "btn btn-primary", onclick: async () => {
+      if (pin.value !== confirm.value) return toast("PINs don't match");
+      try {
+        await api("/access/pin", { method: "PUT", body: { new_pin: pin.value } });
+        const res = await api("/unlock", { method: "POST", body: { pin: pin.value } });
+        setUnlockToken(res.token);
+        await loadCore(); render();
+        toast("PIN changed");
+      } catch (e) { toast(e.message); }
+    } }, "Change PIN"),
+    el("button", { class: "btn btn-quiet", onclick: async () => {
+      // window.confirm, not the local `confirm` PIN-confirmation input above.
+      if (!window.confirm("Remove the PIN? Every profile becomes visible to everyone, on every device.")) return;
+      await api("/access/pin", { method: "PUT", body: { new_pin: "" } });
+      setUnlockToken(null);
+      await loadCore(); render();
+      toast("PIN removed — everyone is public again");
+    } }, "Remove PIN"),
+  ]));
+  return card;
 }
 
 // ---------------- settings ----------------
@@ -1797,11 +1989,12 @@ async function renderSettings(main) {
   }
 
   main.append(card);
+  main.append(await renderPrivacyCard());
 
   // PWA Add to Home Screen card
   if (window.deferredPrompt) {
     const installCard = el("div", { class: "card", style: "max-width:560px; margin-top:20px; border-left:5px solid var(--accent); background:var(--accent-soft)" }, [
-      el("div", { class: "hh-name" }, "✨ Install LabTracker App"),
+      el("div", { class: "hh-name" }, "✨ Install Rakta Charitra"),
       el("p", { class: "desc-text", style: "margin:8px 0 16px; color:var(--text-secondary); font-size:15px;" }, "Install this application on your device for fast access directly from your home screen and improved offline support."),
       el("button", { class: "btn btn-primary", onclick: async () => {
         const promptEvent = window.deferredPrompt;
@@ -1885,7 +2078,6 @@ function openAddMember() {
 }
 
 // ---------------- boot ----------------
-initTheme();
 document.querySelectorAll(".nav-btn").forEach((b) => b.addEventListener("click", () => { navigateTo(b.dataset.view); }));
 $("#add-member").addEventListener("click", openAddMember);
 
@@ -1904,7 +2096,7 @@ window.addEventListener("beforeinstallprompt", (e) => {
 });
 window.addEventListener("appinstalled", () => {
   window.deferredPrompt = null;
-  toast("LabTracker added to Home Screen successfully!");
+  toast("Rakta Charitra added to Home Screen successfully!");
   if (state.view === "settings") {
     render();
   }
