@@ -450,7 +450,7 @@ textarea { resize: vertical; }
 .modal-actions { display: flex; gap: 12px; justify-content: flex-end; margin-top: 24px; }
 
 /* ---------- extract review ---------- */
-.review-row { display: grid; grid-template-columns: 1.5fr 0.8fr 0.9fr 0.55fr; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.review-row { display: grid; grid-template-columns: 44px 1.5fr 0.8fr 0.9fr 0.55fr; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border); }
 .review-head { font-family: var(--sans-display); font-size: 14.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-secondary); font-weight: 750; }
 .unmatched { opacity: 0.6; }
 .warn { color: var(--high); font-size: 14.5px; font-weight: 600; }
