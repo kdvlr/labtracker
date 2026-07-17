@@ -21,17 +21,26 @@ Return ONLY valid JSON, no prose, matching this schema:
   "results": [
     {
       "test_name": "string, as printed",
-      "value": number,
+      "value": number or null,
+      "value_text": "string or null",
       "unit": "string, e.g. mg/dL",
+      "qualifier": "<, >, or null",
       "ref_low": number or null,
       "ref_high": number or null,
       "flag": "H, L, or null"
     }
   ]
 }
-Rules: numbers must be numeric (not strings). Omit qualitative/textual results
-you cannot express as a number. If a reference range is printed as "70-99",
-split into ref_low and ref_high. Use the report's collection/report date."""
+Rules: numbers must be numeric (not strings). If a reference range is printed as
+"70-99", split into ref_low and ref_high. Use the report's collection/report date.
+Report EVERY result, numeric or not. For a qualitative/textual result ("Negative",
+"Trace", "B+", "Pale yellow", "Not detected"), set "value" to null and put the
+printed text verbatim in "value_text" — never invent a number for it. For a normal
+numeric result, set "value_text" to null.
+If a result is printed as a detection/reporting limit rather than a measurement
+(e.g. "<0.01", ">1000"), put the bare number in "value" and the comparator in
+"qualifier" — never drop the comparator, it changes what the result means.
+Always report the unit exactly as printed; only use null if no unit is shown."""
 
 QA_SYSTEM = """You are a careful assistant helping someone understand their (or
 their family's) lab test results over time. You are given structured historical

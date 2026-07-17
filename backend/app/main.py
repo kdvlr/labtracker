@@ -17,8 +17,8 @@ from . import ai
 from .config import FILES_DIR
 from .db import get_db, init_db, row_to_dict
 from .matching import match_test_type
-from .reference import categorize
-from .units import compute_flag, known_units, to_canonical, to_number
+from .reference import age_at, categorize, resolve_range
+from .units import compute_flag, known_units, parse_value, to_canonical, to_number
 
 app = FastAPI(title="LabTracker")
 
@@ -302,9 +302,11 @@ def describe_test_type(tt_id: int, member_id: Optional[int] = None, force_refres
                 
                 related_readings_str = "\n".join(related_readings) if related_readings else "none"
 
+                # Deliberately no name: the provider needs age/sex to interpret a
+                # value, but never who the person is. Keep identifiers local.
                 member_context = (
                     f"Write this clinical reference guide specifically for the patient: "
-                    f"Name: {member['name']}, Age: {age_str}, Sex: {sex}.\n"
+                    f"Age: {age_str}, Sex: {sex}.\n"
                     f"Patient's Latest Result for {row['name']}: {latest_str}\n"
                     f"Patient's Latest Results for Related Tests in the same panel ({row['category']}):\n{related_readings_str}\n"
                 )
@@ -553,27 +555,40 @@ def extract_document(doc_id: int, req: ExtractReq):
         items = []
         for r in parsed.get("results", []):
             name = r.get("test_name")
-            value = to_number(r.get("value"))
+            # Keep any "<"/">" the lab printed: a non-detect is not a measurement.
+            # Prefer the model's explicit qualifier, else recover one from a value
+            # that arrived as "<0.01" despite the schema asking for a number.
+            value, parsed_qual = parse_value(r.get("value"))
+            qualifier = r.get("qualifier") or parsed_qual
+            if qualifier not in ("<", ">"):
+                qualifier = None
             unit = (r.get("unit") or "").strip()
-            # Skip rows with no numeric value or no name — a qualitative result
-            # ("Negative") or a garbled cell can't sink the rest of the report.
-            if value is None or not name or not str(name).strip():
+            value_text = (r.get("value_text") or "").strip() or None
+            # A qualitative result ("Negative", "B+") carries text instead of a
+            # number — it's still a result worth keeping.
+            is_qual = value is None and value_text is not None
+            # Only a row with neither a number nor text is unusable.
+            if (value is None and value_text is None) or not name or not str(name).strip():
                 continue
             ref_low = to_number(r.get("ref_low"))
             ref_high = to_number(r.get("ref_high"))
             tt = match_test_type(name, types)
             canonical = None
-            if tt:
+            if tt and not is_qual:
                 canonical = to_canonical(value, unit, tt["canonical_unit"], tt["conversions"])
             # Only pre-select a merge when the extracted unit actually converts into
             # the matched type. Otherwise a fuzzy name match (e.g. "Cholesterol/HDL
             # Ratio" → "HDL Cholesterol", unit "Ratio") would pair an incompatible
             # unit and fail on save. Those rows default to "track as new" instead.
-            match_ok = tt is not None and canonical is not None
+            # A qualitative row has no unit to reconcile, so a name match is enough
+            # (and is what stops re-imports creating a duplicate test type).
+            match_ok = tt is not None and (is_qual or canonical is not None)
             items.append(
                 {
                     "test_name": name,
                     "value": value,
+                    "value_text": value_text,
+                    "qualifier": qualifier,
                     "unit": unit,
                     "ref_low": ref_low,
                     "ref_high": ref_high,
@@ -631,8 +646,11 @@ def get_extraction(doc_id: int):
 
 class CommitItem(BaseModel):
     test_type_id: int
-    value: float
-    unit: str
+    value: Optional[float] = None       # None for a qualitative result
+    value_text: Optional[str] = None    # "Negative", "B+" — set instead of value
+    unit: str = ""
+    qualifier: Optional[str] = None     # '<' or '>' for a non-detect / limit result
+    flag: Optional[str] = None          # only honoured for qualitative rows
     ref_low: Optional[float] = None
     ref_high: Optional[float] = None
     note: Optional[str] = None
@@ -661,6 +679,11 @@ def commit_results(req: CommitReq):
     conn = get_db()
     try:
         types = {t["id"]: t for t in _test_types(conn)}
+        member = conn.execute("SELECT * FROM members WHERE id = ?", (req.member_id,)).fetchone()
+        m_sex = member["sex"] if member else None
+        # Age at the draw date, not today — a range should reflect who they were
+        # when the blood was taken.
+        m_age = age_at(member["dob"], req.taken_at) if member else None
         skipped = []
         duplicates = []
         prepared = []  # rows that pass validation, ready to insert
@@ -669,22 +692,47 @@ def commit_results(req: CommitReq):
             if not tt:
                 skipped.append({"reason": "unknown test type"})
                 continue
+
+            # Qualitative result: store the text as reported. There's no unit to
+            # convert and no range to compare against, so the lab's own flag is
+            # the only abnormality signal we have.
+            text = (it.value_text or "").strip()
+            if it.value is None and text:
+                q_flag = it.flag if it.flag in ("H", "L") else None
+                existing = conn.execute(
+                    "SELECT value_text FROM results WHERE member_id = ? AND test_type_id = ? AND taken_at = ?",
+                    (req.member_id, it.test_type_id, req.taken_at),
+                ).fetchall()
+                if any((e["value_text"] or "").strip().lower() == text.lower() for e in existing):
+                    duplicates.append({"name": tt["name"], "date": req.taken_at, "value": text, "unit": ""})
+                prepared.append((it, None, None, None, q_flag, None, text))
+                continue
+            if it.value is None:
+                skipped.append({"name": tt["name"], "reason": "no value reported"})
+                continue
+
             canonical = to_canonical(it.value, it.unit, tt["canonical_unit"], tt["conversions"])
             if canonical is None:
                 # One incompatible unit must not sink the whole report — skip this
                 # row, save the rest, and tell the caller what didn't go in.
-                skipped.append({
-                    "name": tt["name"],
-                    "unit": it.unit,
-                    "reason": f"unit '{it.unit}' can't convert to {tt['canonical_unit'] or 'its unit'}",
-                })
+                if not (it.unit or "").strip():
+                    reason = f"no unit reported (expected {tt['canonical_unit']}) — set the unit in review"
+                else:
+                    reason = f"unit '{it.unit}' can't convert to {tt['canonical_unit'] or 'its unit'}"
+                skipped.append({"name": tt["name"], "unit": it.unit, "reason": reason})
                 continue
             rlow_c = to_canonical(it.ref_low, it.unit, tt["canonical_unit"], tt["conversions"]) if it.ref_low is not None else None
             rhigh_c = to_canonical(it.ref_high, it.unit, tt["canonical_unit"], tt["conversions"]) if it.ref_high is not None else None
-            # Fall back to canonical reference range from the catalog.
-            eff_low = rlow_c if rlow_c is not None else tt["ref_low"]
-            eff_high = rhigh_c if rhigh_c is not None else tt["ref_high"]
-            flag = compute_flag(canonical, eff_low, eff_high)
+            # Never blend sources: if the report printed either bound, that range
+            # stands on its own (a missing side means unbounded). Only a report
+            # with no range at all falls back to the catalog, resolved for this
+            # member's sex and age.
+            if rlow_c is not None or rhigh_c is not None:
+                eff_low, eff_high = rlow_c, rhigh_c
+            else:
+                eff_low, eff_high = resolve_range(tt["slug"], tt["ref_low"], tt["ref_high"], m_sex, m_age)
+            qualifier = it.qualifier if it.qualifier in ("<", ">") else None
+            flag = compute_flag(canonical, eff_low, eff_high, qualifier)
 
             # A duplicate is the same member + test + date carrying the same
             # (canonical) value — i.e. re-importing a report already on file.
@@ -698,7 +746,7 @@ def commit_results(req: CommitReq):
                     "value": it.value, "unit": it.unit,
                 })
 
-            prepared.append((it, canonical, rlow_c, rhigh_c, flag))
+            prepared.append((it, canonical, rlow_c, rhigh_c, flag, qualifier, None))
 
         # Block on duplicates unless the caller explicitly forces the save. Nothing
         # is written in this case, so the client can safely retry with force=true.
@@ -707,16 +755,17 @@ def commit_results(req: CommitReq):
                     "needs_confirmation": True}
 
         created = 0
-        for it, canonical, rlow_c, rhigh_c, flag in prepared:
+        for it, canonical, rlow_c, rhigh_c, flag, qualifier, text in prepared:
             conn.execute(
                 """INSERT INTO results
                    (member_id, test_type_id, document_id, taken_at, value, unit, value_canonical,
-                    ref_low, ref_high, ref_low_canonical, ref_high_canonical, flag, note)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    value_text, ref_low, ref_high, ref_low_canonical, ref_high_canonical,
+                    flag, qualifier, note)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     req.member_id, it.test_type_id, req.document_id, req.taken_at,
-                    it.value, it.unit, canonical, it.ref_low, it.ref_high,
-                    rlow_c, rhigh_c, flag, it.note,
+                    it.value, it.unit, canonical, text, it.ref_low, it.ref_high,
+                    rlow_c, rhigh_c, flag, qualifier, it.note,
                 ),
             )
             created += 1
@@ -735,7 +784,8 @@ def get_results(member_id: Optional[int] = None, test_type_id: Optional[int] = N
     conn = get_db()
     try:
         q = """SELECT r.*, t.name AS test_name, t.slug AS test_slug, t.canonical_unit,
-                      t.category, m.name AS member_name
+                      t.category, t.ref_low AS cat_ref_low, t.ref_high AS cat_ref_high,
+                      m.name AS member_name, m.sex AS member_sex, m.dob AS member_dob
                FROM results r
                JOIN test_types t ON t.id = r.test_type_id
                JOIN members m ON m.id = r.member_id
@@ -749,7 +799,23 @@ def get_results(member_id: Optional[int] = None, test_type_id: Optional[int] = N
             params.append(test_type_id)
         q += " ORDER BY r.taken_at"
         rows = conn.execute(q, params).fetchall()
-        return [dict(r) for r in rows]
+        out = []
+        for r in rows:
+            d = dict(r)
+            # Same reconciliation as the summary, per result: the report's own
+            # range wins whole; otherwise the catalog range for this member's sex
+            # and age *at that draw*. Never a blend of the two.
+            if d["ref_low_canonical"] is not None or d["ref_high_canonical"] is not None:
+                d["eff_ref_low"], d["eff_ref_high"] = d["ref_low_canonical"], d["ref_high_canonical"]
+                d["ref_source"] = "report"
+            else:
+                d["eff_ref_low"], d["eff_ref_high"] = resolve_range(
+                    d["test_slug"], d["cat_ref_low"], d["cat_ref_high"],
+                    d["member_sex"], age_at(d["member_dob"], d["taken_at"]),
+                )
+                d["ref_source"] = "catalog"
+            out.append(d)
+        return out
     finally:
         conn.close()
 
@@ -769,7 +835,7 @@ def _summary_for(conn, member_id: int) -> list:
     # Pull every point in one query so the client needs no per-row fetch for
     # the inline sparkline (a member can have 100+ test types).
     pts = conn.execute(
-        """SELECT test_type_id, value_canonical, flag, taken_at, value, unit,
+        """SELECT test_type_id, value_canonical, value_text, flag, qualifier, taken_at, value, unit,
                   ref_low_canonical, ref_high_canonical
            FROM results WHERE member_id = ? ORDER BY test_type_id, taken_at""",
         (member_id,),
@@ -777,13 +843,29 @@ def _summary_for(conn, member_id: int) -> list:
     series = {}
     for p in pts:
         series.setdefault(p["test_type_id"], []).append(dict(p))
+
+    member = conn.execute("SELECT * FROM members WHERE id = ?", (member_id,)).fetchone()
+    m_sex = member["sex"] if member else None
     out = []
     for r in rows:
         s = series.get(r["test_type_id"], [])
         d = row_to_dict(r)
         d["flagged"] = int(r["flagged"] or 0)
-        d["latest"] = s[-1] if s else None
-        d["spark"] = [p["value_canonical"] for p in s]
+        latest = s[-1] if s else None
+        d["latest"] = latest
+        # Qualitative points have no number — keep them out of the sparkline.
+        d["spark"] = [p["value_canonical"] for p in s if p["value_canonical"] is not None]
+        # Resolve ONE authoritative range per marker so the client never has to
+        # (and never gets to) blend the report's range with the catalog's.
+        m_age = age_at(member["dob"], latest["taken_at"]) if member and latest else None
+        lo = latest["ref_low_canonical"] if latest else None
+        hi = latest["ref_high_canonical"] if latest else None
+        if lo is not None or hi is not None:
+            d["ref_low"], d["ref_high"] = lo, hi
+            d["ref_source"] = "report"
+        else:
+            d["ref_low"], d["ref_high"] = resolve_range(r["slug"], r["ref_low"], r["ref_high"], m_sex, m_age)
+            d["ref_source"] = "catalog"
         out.append(d)
     return out
 
@@ -1018,7 +1100,14 @@ def ask(req: AskReq):
         member = conn.execute("SELECT * FROM members WHERE id = ?", (req.member_id,)).fetchone()
         if not member:
             raise HTTPException(404, "Member not found")
-        lines = [f"Member: {member['name']}"]
+        # Age/sex help interpretation; the person's name never leaves the box.
+        age = age_at(member["dob"])
+        who = ["Patient"]
+        if age is not None:
+            who.append(f"{age}y")
+        if member["sex"]:
+            who.append(str(member["sex"]))
+        lines = [" · ".join(who)]
         for ttid in req.test_type_ids:
             tt = conn.execute("SELECT * FROM test_types WHERE id = ?", (ttid,)).fetchone()
             if not tt:

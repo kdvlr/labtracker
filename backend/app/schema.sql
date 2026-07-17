@@ -49,14 +49,21 @@ CREATE TABLE IF NOT EXISTS results (
     test_type_id INTEGER NOT NULL REFERENCES test_types(id) ON DELETE CASCADE,
     document_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,
     taken_at TEXT NOT NULL,
-    value REAL NOT NULL,
+    -- A result is either numeric (value/value_canonical) or qualitative
+    -- (value_text, e.g. "Negative", "B+", "Trace"). Numeric columns stay NULL
+    -- for qualitative rows so they never pollute charts or averages.
+    value REAL,
     unit TEXT NOT NULL,
-    value_canonical REAL NOT NULL,
+    value_canonical REAL,
+    value_text TEXT,
     ref_low REAL,
     ref_high REAL,
     ref_low_canonical REAL,
     ref_high_canonical REAL,
     flag TEXT,          -- 'H' | 'L' | NULL
+    -- '<' or '>' when the lab reported a detection/reporting limit rather than a
+    -- measurement ("<0.01"). value/value_canonical then hold the limit itself.
+    qualifier TEXT,
     note TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

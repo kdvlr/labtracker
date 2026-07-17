@@ -45,6 +45,9 @@ function toast(msg) {
 }
 
 const fmtNum = (n) => (n == null ? "—" : Number(n).toLocaleString(undefined, { maximumFractionDigits: 3 }));
+// A non-detect ("<0.01") must never render as a bare measurement — keep the
+// comparator the lab printed.
+const fmtVal = (n, qualifier) => (n == null ? "—" : (qualifier ? qualifier : "") + fmtNum(n));
 const fmtDate = (s) => (s ? new Date(s).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "—");
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -130,82 +133,130 @@ function initTheme() {
   mqDark.addEventListener("change", () => { if (!document.documentElement.getAttribute("data-theme")) applyTheme(null); });
 }
 
+// A "nice" axis step (1/2/2.5/5/10 x10^n) so ticks land on round numbers
+// instead of arbitrary fractions of the data range (120.96, 114.48, …).
+function niceStep(span, count) {
+  const raw = (span || 1) / Math.max(1, count);
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const n = raw / mag;
+  const mult = n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10;
+  return Number((mult * mag).toPrecision(12));
+}
+// Decimals implied by the step itself: a step of 5 needs none, 0.5 needs one.
+// This is what keeps a lymphocyte count on whole numbers while HbA1c keeps its
+// tenths — the precision follows the scale rather than a fixed guess.
+function decimalsFor(step) {
+  const m = String(step).match(/\.(\d+)/);
+  return m ? Math.min(6, m[1].length) : 0;
+}
+const fmtTick = (v, dec) => Number(v).toLocaleString(undefined, { minimumFractionDigits: dec, maximumFractionDigits: dec });
+
 function trendChart(points, opts) {
-  // opts: { unit, refLow, refHigh, convert }
-  const W = 720, H = 300, m = { t: 16, r: 20, b: 34, l: 52 };
+  // opts: { unit, zones (canonical), convert }
+  const W = 720, H = 300, m = { t: 24, r: 64, b: 34, l: 58 };
   const iw = W - m.l - m.r, ih = H - m.t - m.b;
   const conv = opts.convert;
   const vals = points.map((p) => conv(p.value_canonical));
+  // Work in display units throughout, zone boundaries included.
+  const dz = opts.zones ? opts.zones.map((z) => ({ c: z.c, label: z.label, to: z.to == null ? null : conv(z.to) })) : null;
+
   let lo = Math.min(...vals), hi = Math.max(...vals);
-  if (opts.refLow != null) lo = Math.min(lo, conv(opts.refLow));
-  if (opts.refHigh != null) hi = Math.max(hi, conv(opts.refHigh));
-  const pad = (hi - lo) * 0.12 || Math.abs(hi) * 0.12 || 1;
-  lo -= pad; hi += pad;
+  // Pull in the boundaries of the band the latest value sits in, so the chart
+  // always shows the value *in context* rather than floating in one flat colour.
+  if (dz) {
+    const az = zoneOf(vals[vals.length - 1], dz);
+    const i = dz.indexOf(az);
+    for (const edge of [i > 0 ? dz[i - 1].to : null, az.to]) {
+      if (edge != null) { lo = Math.min(lo, edge); hi = Math.max(hi, edge); }
+    }
+  }
+  if (lo === hi) { const d = Math.abs(lo) * 0.1 || 1; lo -= d; hi += d; }
+  const padv = (hi - lo) * 0.15;
+  lo -= padv; hi += padv;
+  const step = niceStep(hi - lo, 5);
+  lo = Math.floor(lo / step) * step;
+  hi = Math.ceil(hi / step) * step;
+  if (Math.min(...vals) >= 0 && lo < 0) lo = 0;   // lab values don't go negative
+  const dec = decimalsFor(step);
   const span = hi - lo || 1;
+
   const times = points.map((p) => new Date(p.taken_at).getTime());
   const tmin = Math.min(...times), tmax = Math.max(...times);
   const tspan = tmax - tmin || 1;
   const xs = (t) => m.l + (points.length === 1 ? iw / 2 : ((t - tmin) / tspan) * iw);
   const ys = (v) => m.t + ih - ((v - lo) / span) * ih;
+  const clampY = (y) => Math.max(m.t, Math.min(m.t + ih, y));
 
   const svg = svgNode("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, style: "max-width:100%" });
 
-  // gradient def for area fill
-  const defs = svgNode("defs");
-  const grad = svgNode("linearGradient", { id: "areaGrad", x1: 0, y1: 0, x2: 0, y2: 1 });
-  const cs = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#2f6fe0";
-  const s1 = svgNode("stop", { offset: "0%", "stop-color": cs, "stop-opacity": "0.28" });
-  const s2 = svgNode("stop", { offset: "100%", "stop-color": cs, "stop-opacity": "0" });
-  grad.append(s1, s2); defs.append(grad); svg.append(defs);
-
-  // reference band
-  if (opts.refLow != null || opts.refHigh != null) {
-    const yTop = ys(opts.refHigh != null ? conv(opts.refHigh) : hi);
-    const yBot = ys(opts.refLow != null ? conv(opts.refLow) : lo);
-    svg.append(svgNode("rect", { x: m.l, y: yTop, width: iw, height: Math.max(0, yBot - yTop), class: "ref-band" }));
-    if (opts.refHigh != null) svg.append(svgNode("line", { x1: m.l, x2: m.l + iw, y1: yTop, y2: yTop, class: "ref-line" }));
-    if (opts.refLow != null) svg.append(svgNode("line", { x1: m.l, x2: m.l + iw, y1: yBot, y2: yBot, class: "ref-line" }));
+  // Zone bands — the same green / amber / red story as the range bar.
+  if (dz) {
+    let prev = null;
+    for (const z of dz) {
+      const top = clampY(ys(z.to == null ? hi : z.to));
+      const bot = clampY(ys(prev == null ? lo : prev));
+      if (bot - top > 0.5) {
+        svg.append(svgNode("rect", { x: m.l, y: top, width: iw, height: bot - top, class: "zband " + z.c }));
+      }
+      if (z.to != null && z.to > lo && z.to < hi) {
+        svg.append(svgNode("line", { x1: m.l, x2: m.l + iw, y1: ys(z.to), y2: ys(z.to), class: "zbound" }));
+      }
+      prev = z.to;
+    }
   }
 
-  // y gridlines + ticks
-  const nTicks = 4;
-  for (let i = 0; i <= nTicks; i++) {
-    const v = lo + (span * i) / nTicks;
+  // y gridlines + ticks on round values
+  for (let v = lo; v <= hi + step * 1e-9; v += step) {
     const y = ys(v);
     svg.append(svgNode("line", { x1: m.l, x2: m.l + iw, y1: y, y2: y, class: "grid-line" }));
     const t = svgNode("text", { x: m.l - 8, y: y + 4, "text-anchor": "end", class: "tick" });
-    t.textContent = fmtNum(v);
+    t.textContent = fmtTick(v, dec);
     svg.append(t);
   }
-  // baseline
   svg.append(svgNode("line", { x1: m.l, x2: m.l + iw, y1: m.t + ih, y2: m.t + ih, class: "axis-line" }));
+
+  // unit caption, so the scale is readable without the legend
+  if (opts.unit) {
+    const u = svgNode("text", { x: m.l - 8, y: m.t - 9, "text-anchor": "end", class: "tick axis-unit" });
+    u.textContent = opts.unit;
+    svg.append(u);
+  }
 
   // x ticks
   const nx = Math.min(points.length, 5);
   for (let i = 0; i < nx; i++) {
     const t = points.length === 1 ? tmin : tmin + (tspan * i) / (nx - 1);
-    const x = xs(t);
-    const lbl = svgNode("text", { x, y: H - 12, "text-anchor": "middle", class: "tick" });
+    const lbl = svgNode("text", { x: xs(t), y: H - 12, "text-anchor": "middle", class: "tick" });
     lbl.textContent = new Date(t).toLocaleDateString(undefined, { month: "short", year: "2-digit" });
     svg.append(lbl);
   }
 
-  // area + line
-  const linePts = points.map((p, i) => `${xs(times[i]).toFixed(1)},${ys(conv(p.value_canonical)).toFixed(1)}`);
-  const d = "M" + linePts.join(" L");
+  // dotted connector between readings (only meaningful with more than one)
   if (points.length > 1) {
-    const area = `M${xs(times[0]).toFixed(1)},${(m.t + ih).toFixed(1)} L${linePts.join(" L")} L${xs(times[times.length - 1]).toFixed(1)},${(m.t + ih).toFixed(1)} Z`;
-    svg.append(svgNode("path", { d: area, class: "series-area" }));
+    const d = "M" + points.map((p, i) => `${xs(times[i]).toFixed(1)},${ys(vals[i]).toFixed(1)}`).join(" L");
+    svg.append(svgNode("path", { d, class: "series-line dotted" }));
   }
-  svg.append(svgNode("path", { d, class: "series-line" }));
 
-  // points w/ tooltips
+  // points, coloured by the band they land in
   points.forEach((p, i) => {
-    const c = svgNode("circle", { cx: xs(times[i]), cy: ys(conv(p.value_canonical)), r: 5, class: "pt" + (p.flag ? " pt-" + p.flag : "") });
+    const isLast = i === points.length - 1;
+    const cx = xs(times[i]), cy = ys(vals[i]);
+    const zc = dz ? zoneOf(vals[i], dz).c : "green";
+    if (isLast) svg.append(svgNode("circle", { cx, cy, r: 11, class: "pt-halo " + zc }));
+    const c = svgNode("circle", { cx, cy, r: isLast ? 6 : 4, class: "pt " + zc + (isLast ? " latest" : "") });
     const title = svgNode("title");
-    title.textContent = `${fmtDate(p.taken_at)}: ${fmtNum(conv(p.value_canonical))} ${opts.unit}${p.flag ? " (" + (p.flag === "H" ? "high" : "low") + ")" : ""}\nreported: ${fmtNum(p.value)} ${p.unit}`;
+    title.textContent = `${fmtDate(p.taken_at)}: ${fmtVal(conv(p.value_canonical), p.qualifier)} ${opts.unit}`
+      + (dz ? ` — ${zoneOf(vals[i], dz).label}` : "")
+      + `\nreported: ${fmtVal(p.value, p.qualifier)} ${p.unit}`;
     c.append(title);
     svg.append(c);
+    // Label the current reading so you never have to hunt for "where am I now".
+    if (isLast) {
+      const lx = Math.min(cx + 12, W - 4);
+      const lbl = svgNode("text", { x: lx, y: cy - 12, "text-anchor": cx > m.l + iw - 40 ? "end" : "start", class: "pt-label " + zc });
+      lbl.textContent = `${fmtVal(conv(p.value_canonical), p.qualifier)}${opts.unit ? " " + opts.unit : ""}`;
+      svg.append(lbl);
+    }
   });
   return svg;
 }
@@ -273,7 +324,8 @@ function render() {
   const main = $("#main");
   main.innerHTML = "";
   document.querySelectorAll(".nav-btn").forEach((b) => b.classList.remove("active"));
-  if (state.view === "overview") renderOverview(main);
+  if (state.view === "household") renderHousehold(main);
+  else if (state.view === "overview") renderOverview(main);
   else if (state.view === "detail") renderDetail(main);
   else if (state.view === "upload") renderUpload(main);
   else if (state.view === "documents") renderDocuments(main);
@@ -502,8 +554,10 @@ function openEditMember(member) {
   ]);
 }
 
-const rangeLow = (s) => s.latest?.ref_low_canonical ?? s.ref_low;
-const rangeHigh = (s) => s.latest?.ref_high_canonical ?? s.ref_high;
+// The server resolves ONE range per marker (the report's own range whole, else
+// the catalog range for this member's sex/age). Never re-blend the two here.
+const rangeLow = (s) => s.ref_low;
+const rangeHigh = (s) => s.ref_high;
 
 // Interpretation bands: the marker's own multi-zone bands if defined, else a
 // simple in/out band derived from the effective reference range.
@@ -537,8 +591,14 @@ function zoneOf(value, zones) {
   for (const z of zones) if (z.to == null || value < z.to) return z;
   return zones[zones.length - 1];
 }
+// A result is qualitative when the lab reported text ("Negative") instead of a
+// number. It has no scale, so no zones and no chart — only the lab's own flag
+// can mark it abnormal.
+const isQualitative = (s) => s?.latest?.value_text != null && s?.latest?.value_canonical == null;
+
 // status color: "green" | "amber" | "red" | "na"
 function statusOf(s) {
+  if (isQualitative(s)) return s.latest.flag ? "red" : "na";
   const v = s.latest?.value_canonical;
   const zones = effectiveZones(s);
   if (v == null || !zones) return "na";
@@ -546,11 +606,109 @@ function statusOf(s) {
 }
 const BADGE_CLASS = { green: "ok", amber: "warn", red: "bad", na: "na" };
 
+// ---------------- household (everyone at a glance) ----------------
+async function renderHousehold(main) {
+  $(`[data-view="household"]`)?.classList.add("active");
+  main.append(el("div", { class: "page-head" }, el("div", {}, [
+    el("h1", { class: "page-title" }, "Household"),
+    el("p", { class: "page-sub" }, "Everyone at a glance — who needs a closer look."),
+  ])));
+
+  if (!state.members.length) {
+    main.append(el("div", { class: "card empty-card empty" }, [
+      el("span", { class: "empty-icon" }, "👋"),
+      el("div", {}, "No family members yet."),
+      el("div", { style: "margin-top:14px" }, el("button", { class: "btn btn-primary", onclick: openAddMember }, "＋ Add your first member")),
+    ]));
+    return;
+  }
+
+  const mount = el("div", { class: "household-grid" });
+  main.append(mount);
+  mount.append(el("div", { class: "empty" }, [el("span", { class: "spinner" }), " Loading household…"]));
+
+  // One summary per member; a household is small, so parallel is fine and this
+  // reuses the exact same status logic the dashboard uses.
+  let summaries;
+  try {
+    summaries = await Promise.all(state.members.map((m) => api(`/members/${m.id}/summary`)));
+  } catch (e) {
+    mount.innerHTML = "";
+    mount.append(el("div", { class: "warn" }, "Couldn't load household: " + e.message));
+    return;
+  }
+  mount.innerHTML = "";
+
+  state.members.forEach((m, i) => {
+    const summary = summaries[i] || [];
+    const red = summary.filter((s) => statusOf(s) === "red");
+    const amber = summary.filter((s) => statusOf(s) === "amber");
+    const green = summary.filter((s) => statusOf(s) === "green");
+    const attention = [...red, ...amber];
+    const latest = summary.reduce((a, s) => (!a || (s.latest_at || "") > a ? (s.latest_at || "") : a), "");
+
+    const card = el("div", { class: "hh-card" }, [
+      el("div", { class: "hh-head", onclick: () => { state.activeMember = m.id; state.view = "overview"; render(); } }, [
+        el("span", { class: "avatar", style: `background:${m.color || "#2f6fe0"}` }, initials(m.name)),
+        el("div", { style: "min-width:0" }, [
+          el("div", { class: "hh-name" }, m.name),
+          el("div", { class: "hh-meta" }, summary.length
+            ? `${summary.length} biomarkers · last ${fmtDate(latest)}`
+            : "No results yet"),
+        ]),
+        el("span", { class: "spacer" }),
+        el("span", { class: "row-chev" }, "›"),
+      ]),
+    ]);
+
+    if (!summary.length) {
+      card.append(el("div", { class: "hh-empty" }, "Upload a report to start tracking."));
+      mount.append(card);
+      return;
+    }
+
+    card.append(el("div", { class: "hh-pills" }, [
+      red.length ? el("span", { class: "count-pill out" }, `${red.length} out of range`) : null,
+      amber.length ? el("span", { class: "count-pill borderline" }, `${amber.length} borderline`) : null,
+      green.length ? el("span", { class: "count-pill in" }, `${green.length} in range`) : null,
+    ].filter(Boolean)));
+
+    if (!attention.length) {
+      card.append(el("div", { class: "hh-allclear" }, "✓ Nothing out of range"));
+    } else {
+      const list = el("div", { class: "hh-list" });
+      attention.slice(0, 6).forEach((s) => {
+        const c = statusOf(s);
+        list.append(el("button", {
+          class: "hh-item",
+          onclick: () => { state.activeMember = m.id; openDetail(m, s.test_type_id); },
+        }, [
+          el("span", { class: "hh-dot " + c }),
+          el("span", { class: "hh-item-name" }, s.name),
+          el("span", { class: "spacer" }),
+          el("span", { class: "hh-item-val " + c }, isQualitative(s)
+            ? s.latest.value_text
+            : `${fmtVal(s.latest?.value_canonical, s.latest?.qualifier)} ${s.canonical_unit || ""}`),
+        ]));
+      });
+      if (attention.length > 6) {
+        list.append(el("div", { class: "hh-more" }, `+ ${attention.length - 6} more`));
+      }
+      card.append(list);
+    }
+    mount.append(card);
+  });
+}
+
 function bioCard(member, s) {
+  const qual = isQualitative(s);
   const v = s.latest?.value_canonical;
-  const zones = effectiveZones(s);
-  const z = v != null && zones ? zoneOf(v, zones) : null;
-  const c = z ? z.c : "na";
+  const zones = qual ? null : effectiveZones(s);
+  const z = !qual && v != null && zones ? zoneOf(v, zones) : null;
+  const c = qual ? statusOf(s) : (z ? z.c : "na");
+  const badgeText = qual
+    ? (s.latest.flag === "H" ? "Abnormal" : s.latest.flag === "L" ? "Abnormal" : "Recorded")
+    : (z ? z.label : "No range");
   return el("div", { class: "bio-card", onclick: () => openDetail(member, s.test_type_id) }, [
     el("div", { class: "bio-card-head" }, [
       el("div", {}, [
@@ -558,13 +716,14 @@ function bioCard(member, s) {
         el("div", { class: "bio-date" }, fmtDate(s.latest_at)),
       ]),
       el("div", { class: "bio-right" }, [
-        el("div", { class: "bio-value " + c }, [
-          fmtNum(v), s.canonical_unit ? el("span", { class: "u" }, s.canonical_unit) : null,
-        ]),
-        el("span", { class: "status-badge " + BADGE_CLASS[c] }, z ? z.label : "No range"),
+        el("div", { class: "bio-value " + c }, qual
+          ? [s.latest.value_text]
+          : [fmtVal(v, s.latest?.qualifier), s.canonical_unit ? el("span", { class: "u" }, s.canonical_unit) : null]),
+        el("span", { class: "status-badge " + BADGE_CLASS[c] }, badgeText),
       ]),
     ]),
-    rangeBar(v, zones),
+    // A qualitative result has no scale to place it on.
+    qual ? null : rangeBar(v, zones),
   ]);
 }
 
@@ -633,17 +792,25 @@ async function renderDetail(main) {
   ]));
 
   const last = rows[rows.length - 1];
+  // eff_ref_* is the server-reconciled range for this result (report range whole,
+  // else the catalog range for this member's sex/age at that draw).
   const pseudo = {
-    zones: t.zones, ref_low: t.ref_low, ref_high: t.ref_high,
-    latest: last ? { value_canonical: last.value_canonical, ref_low_canonical: last.ref_low_canonical, ref_high_canonical: last.ref_high_canonical } : null,
+    zones: t.zones,
+    ref_low: last ? last.eff_ref_low : t.ref_low,
+    ref_high: last ? last.eff_ref_high : t.ref_high,
+    latest: last ? { value_canonical: last.value_canonical, value_text: last.value_text, flag: last.flag } : null,
   };
-  const zones = effectiveZones(pseudo);
-  const z = last && zones ? zoneOf(last.value_canonical, zones) : null;
-  const c = z ? z.c : "na";
+  const qual = isQualitative(pseudo);
+  const zones = qual ? null : effectiveZones(pseudo);
+  const z = !qual && last && zones ? zoneOf(last.value_canonical, zones) : null;
+  const c = qual ? statusOf(pseudo) : (z ? z.c : "na");
+  const badgeText = qual
+    ? (last.flag ? "Abnormal" : "Recorded")
+    : (z ? z.label : "No range");
 
   main.append(el("div", { class: "page-head" }, [
     el("div", {}, [
-      el("h1", { class: "page-title" }, [t.name, " ", el("span", { class: "status-badge " + BADGE_CLASS[c], style: "vertical-align:middle;font-size:13px" }, z ? z.label : "No range")]),
+      el("h1", { class: "page-title" }, [t.name, " ", el("span", { class: "status-badge " + BADGE_CLASS[c], style: "vertical-align:middle;font-size:13px" }, badgeText)]),
       el("p", { class: "page-sub" }, `${member.name} · ${rows.length} result${rows.length !== 1 ? "s" : ""}${t.category ? " · " + t.category : ""}`),
     ]),
     el("div", { class: "head-actions", style: "align-items:flex-end" }, [
@@ -687,13 +854,13 @@ function zoneLegend(zones, value, canonical_unit) {
   // headline value + multi-zone bar
   if (last) {
     const headlineCard = el("div", { class: "card", style: "margin-bottom:20px" }, [
-      el("div", { class: "bio-value " + c, style: "font-size:26px" }, [
-        fmtNum(last.value_canonical), t.canonical_unit ? el("span", { class: "u" }, t.canonical_unit) : null,
-      ]),
+      el("div", { class: "bio-value " + c, style: "font-size:26px" }, qual
+        ? [last.value_text]
+        : [fmtVal(last.value_canonical, last.qualifier), t.canonical_unit ? el("span", { class: "u" }, t.canonical_unit) : null]),
       el("div", { class: "bio-date", style: "margin-bottom:2px" }, `Latest · ${fmtDate(last.taken_at)}`),
-      rangeBar(last.value_canonical, zones),
+      qual ? null : rangeBar(last.value_canonical, zones),
     ]);
-    if (zones && zones.length) {
+    if (!qual && zones && zones.length) {
       headlineCard.append(zoneLegend(zones, last.value_canonical, t.canonical_unit));
     }
     main.append(headlineCard);
@@ -703,18 +870,18 @@ function zoneLegend(zones, value, canonical_unit) {
   const displayUnit = state._detail.unit;
   const convert = converter(t, displayUnit);
 
-  // trend chart (always visible)
+  // trend chart — only for numeric markers; text results have nothing to plot.
+  const numericRows = rows.filter((r) => r.value_canonical != null);
   const card = el("div", { class: "card" });
-  if (rows.length) {
+  if (qual || !numericRows.length) {
+    card.append(el("div", { class: "empty" }, qual
+      ? "This is a qualitative result — see the history below."
+      : "No data points."));
+  } else if (numericRows.length) {
     const wrap = el("div", { class: "chart-wrap" });
-    wrap.append(trendChart(rows, { unit: displayUnit, refLow: t.ref_low, refHigh: t.ref_high, convert }));
+    // Same zones as the range bar, so the chart tells the identical story.
+    wrap.append(trendChart(numericRows, { unit: displayUnit, zones, convert }));
     card.append(wrap);
-    card.append(el("div", { class: "legend" }, [
-      legendItem("var(--accent)", "Measurement"),
-      (t.ref_low != null || t.ref_high != null) ? legendItem("var(--good)", `Reference range${refText(t, displayUnit, convert)}`) : null,
-    ].filter(Boolean)));
-  } else {
-    card.append(el("div", { class: "empty" }, "No data points."));
   }
   main.append(card);
 
@@ -755,8 +922,8 @@ function resultsSection(t, rows, convert, displayUnit) {
   [...rows].reverse().forEach((r) => {
     tb.append(el("tr", {}, [
       el("td", {}, fmtDate(r.taken_at)),
-      el("td", { class: "num" }, fmtNum(convert(r.value_canonical))),
-      el("td", {}, `${fmtNum(r.value)} ${r.unit}`),
+      el("td", { class: "num" }, r.value_text != null ? r.value_text : fmtVal(convert(r.value_canonical), r.qualifier)),
+      el("td", {}, r.value_text != null ? r.value_text : `${fmtVal(r.value, r.qualifier)} ${r.unit}`),
       el("td", {}, r.flag ? el("span", { class: "pill pill-" + r.flag }, r.flag === "H" ? "HIGH" : "LOW") : "—"),
       el("td", {}, el("button", { class: "btn btn-sm btn-danger", onclick: async () => {
         if (confirm("Delete this result?")) { await api(`/results/${r.id}`, { method: "DELETE" }); render(); }
@@ -1013,6 +1180,12 @@ function multiTrendChart(series, opts) {
   if (opts.refHigh != null) hi = Math.max(hi, conv(opts.refHigh));
   const vpad = (hi - lo) * 0.12 || Math.abs(hi) * 0.12 || 1;
   lo -= vpad; hi += vpad;
+  // Round the scale to a nice step so ticks read 30/32/34, not 30.6/32.44/34.28.
+  const vstep = niceStep(hi - lo, 4);
+  lo = Math.floor(lo / vstep) * vstep;
+  hi = Math.ceil(hi / vstep) * vstep;
+  if (Math.min(...vals) >= 0 && lo < 0) lo = 0;
+  const vdec = decimalsFor(vstep);
   const span = hi - lo || 1;
   const times = all.map((p) => new Date(p.taken_at).getTime());
   const tmin = Math.min(...times), tmax = Math.max(...times);
@@ -1030,13 +1203,11 @@ function multiTrendChart(series, opts) {
     if (opts.refLow != null) svg.append(svgNode("line", { x1: m.l, x2: m.l + iw, y1: yBot, y2: yBot, class: "ref-line" }));
   }
 
-  const nTicks = 4;
-  for (let i = 0; i <= nTicks; i++) {
-    const v = lo + (span * i) / nTicks;
+  for (let v = lo; v <= hi + vstep * 1e-9; v += vstep) {
     const y = ys(v);
     svg.append(svgNode("line", { x1: m.l, x2: m.l + iw, y1: y, y2: y, class: "grid-line" }));
     const tx = svgNode("text", { x: m.l - 8, y: y + 4, "text-anchor": "end", class: "tick" });
-    tx.textContent = fmtNum(v);
+    tx.textContent = fmtTick(v, vdec);
     svg.append(tx);
   }
   svg.append(svgNode("line", { x1: m.l, x2: m.l + iw, y1: m.t + ih, y2: m.t + ih, class: "axis-line" }));
@@ -1280,8 +1451,12 @@ function renderReview(mount, doc, memberId, result) {
     matchSel.append(el("option", { value: "" }, "— skip (don't save) —"));
     // Default: matched → merge into that type; otherwise track it as a new test.
     matchSel.value = item.matched_test_type_id ? String(item.matched_test_type_id) : "__new__";
-    const valInput = el("input", { type: "number", step: "any", value: item.value });
-    const unitInput = el("input", { type: "text", value: item.unit, style: "width:100%" });
+    // A qualitative row ("Negative") is edited as text; there's no number to step.
+    const isQual = item.value == null && item.value_text != null;
+    const valInput = isQual
+      ? el("input", { type: "text", value: item.value_text })
+      : el("input", { type: "number", step: "any", value: item.value });
+    const unitInput = el("input", { type: "text", value: item.unit, style: "width:100%", ...(isQual ? { placeholder: "—", disabled: "" } : {}) });
     const flagInput = el("input", { type: "text", value: item.flag || "", placeholder: "—", style: "width:100%" });
     const warn = el("div", { class: "warn", style: "grid-column:1/-1", html: "" });
     const rowEl = el("div", { class: "review-row" }, [
@@ -1290,7 +1465,7 @@ function renderReview(mount, doc, memberId, result) {
       el("div", {}, ""),
     ]);
     body.append(rowEl, warn);
-    rows.push({ matchSel, valInput, unitInput, flagInput, warn, item });
+    rows.push({ matchSel, valInput, unitInput, flagInput, warn, item, isQual });
   });
 
   const commitBtn = el("button", { class: "btn btn-primary", onclick: async () => {
@@ -1314,10 +1489,18 @@ function renderReview(mount, doc, memberId, result) {
         } else {
           typeId = Number(sel);
         }
-        items.push({
+        items.push(r.isQual ? {
+          test_type_id: typeId,
+          value: null,
+          value_text: r.valInput.value.trim(),
+          unit: "",
+          flag: r.flagInput.value.trim() || null,
+          note: null,
+        } : {
           test_type_id: typeId,
           value: Number(r.valInput.value),
           unit: r.unitInput.value.trim(),
+          qualifier: r.item.qualifier ?? null,
           ref_low: r.item.ref_low ?? null,
           ref_high: r.item.ref_high ?? null,
           note: null,
@@ -1530,7 +1713,7 @@ async function renderReport(main) {
       const prev = s.spark && s.spark.length > 1 ? s.spark[s.spark.length - 2] : null;
       tb.append(el("tr", {}, [
         el("td", {}, s.name),
-        el("td", { class: "num" }, `${fmtNum(s.latest?.value_canonical)} ${s.canonical_unit || ""}`),
+        el("td", { class: "num" }, `${fmtVal(s.latest?.value_canonical, s.latest?.qualifier)} ${s.canonical_unit || ""}`),
         withPrev ? el("td", { class: "num" }, prev != null ? fmtNum(prev) : "—") : null,
         el("td", {}, refRangeText(s)),
         el("td", {}, statusCellOf(s)),
