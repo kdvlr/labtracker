@@ -1421,7 +1421,19 @@ function renderUpload(main) {
   const memberSel = el("select");
   for (const m of state.members) memberSel.append(el("option", { value: m.id, ...(m.id === state.activeMember ? { selected: "" } : {}) }, m.name));
 
-  const fileInput = el("input", { type: "file", accept: "image/*,application/pdf" });
+  const fileInput = el("input", { 
+    type: "file", 
+    accept: "image/*,application/pdf",
+    style: "display:none;"
+  });
+  const fileStatusText = el("span", { style: "font-size: 14px; color: var(--muted); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px;" }, "No file selected");
+  const browseBtn = el("button", {
+    type: "button",
+    class: "btn btn-secondary",
+    style: "display: inline-flex; align-items: center; gap: 8px; justify-content: center; height: 38px; padding: 0 16px; flex-shrink: 0;",
+    onclick: () => fileInput.click()
+  }, "📁 Browse Files");
+
   const status = el("div", { style: "margin-top:12px" });
   const reviewMount = el("div", { style: "margin-top:20px" });
 
@@ -1480,6 +1492,7 @@ function renderUpload(main) {
         name = `clipboard_paste_${new Date().toISOString().slice(0, 10)}.${ext}`;
       }
       
+      fileStatusText.textContent = `📋 Attached: ${name}`;
       pasteInput.value = `📋 Attached: ${name}`;
       toast("File pasted successfully!");
       return;
@@ -1495,14 +1508,25 @@ function renderUpload(main) {
 
   fileInput.addEventListener("change", () => {
     if (fileInput.files[0]) {
+      const file = fileInput.files[0];
+      fileStatusText.textContent = `📄 Attached: ${file.name}`;
       pasteInput.value = "";
+    } else {
+      fileStatusText.textContent = "No file selected";
     }
   });
 
   const card = el("div", { class: "card" }, [
     el("div", { class: "row" }, [
       el("div", { class: "field" }, [el("label", {}, "Family member"), memberSel]),
-      el("div", { class: "field" }, [el("label", {}, "Choose report file"), fileInput]),
+      el("div", { class: "field" }, [
+        el("label", {}, "Lab report file"),
+        el("div", { style: "display: flex; align-items: center; gap: 12px; min-height: 48px;" }, [
+          fileInput,
+          browseBtn,
+          fileStatusText
+        ])
+      ]),
     ]),
     el("div", { style: "text-align: center; margin: 10px 0 16px; color: var(--muted); font-size: 13.5px; font-weight: 600;" }, "— OR —"),
     el("div", { class: "field", style: "margin-bottom: 20px;" }, [
@@ -1543,6 +1567,7 @@ function renderUpload(main) {
     if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
       fileInput.files = e.dataTransfer.files;
       const file = e.dataTransfer.files[0];
+      fileStatusText.textContent = `📋 Attached: ${file.name}`;
       pasteInput.value = `📋 Attached: ${file.name}`;
       toast("File dropped successfully!");
     }
