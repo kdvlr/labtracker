@@ -1866,8 +1866,16 @@ function renderReview(mount, doc, memberId, result, main) {
   if (needsReviewItems.length === 0) {
     needsReviewContent.append(el("div", { class: "empty", style: "padding: 16px 0;" }, "No items remaining to review."));
   } else {
+    const selectAllCb = el("input", { type: "checkbox", checked: "" });
+    selectAllCb.addEventListener("change", () => {
+      rows.forEach(r => {
+        r.importCb.checked = selectAllCb.checked;
+      });
+    });
+
     const head = el("div", { class: "review-row review-head" }, [
-      el("div", {}, "Test"), el("div", {}, "Value"), el("div", {}, "Unit"), el("div", {}, "Flag"), el("div", {}, "Action"),
+      el("div", { style: "display: flex; align-items: center; justify-content: center;" }, selectAllCb),
+      el("div", {}, "Test"), el("div", {}, "Value"), el("div", {}, "Unit"), el("div", {}, "Flag"),
     ]);
     const body = el("div");
     
@@ -1889,11 +1897,11 @@ function renderReview(mount, doc, memberId, result, main) {
       // Page link helper
       const pageLink = item.page_number 
         ? el("a", { 
-            href: `/api/documents/${doc.id}/file#page=${item.page_number}`, 
-            target: "_blank", 
-            class: "pill pill-ok", 
-            style: "font-size: 11px; padding: 2px 6px; margin-left: 8px; text-decoration: none; display: inline-block;" 
-          }, `Page ${item.page_number}`)
+          href: `/api/documents/${doc.id}/file#page=${item.page_number}`, 
+          target: "_blank", 
+          class: "pill pill-ok", 
+          style: "font-size: 11px; padding: 2px 6px; margin-left: 8px; text-decoration: none; display: inline-block;" 
+        }, `Page ${item.page_number}`)
         : null;
         
       const rowLabel = el("div", {}, [
@@ -1904,95 +1912,16 @@ function renderReview(mount, doc, memberId, result, main) {
         matchSel
       ]);
       
-      const importRowBtn = el("button", { 
-        class: "btn btn-sm btn-primary", 
-        onclick: async () => {
-          importRowBtn.disabled = true;
-          const original = importRowBtn.textContent;
-          importRowBtn.textContent = "⌛";
-          warn.style.display = "none";
-          try {
-            const mid = typeof memberId === "function" ? memberId() : memberId;
-            if (!mid) { toast("Choose a family member first"); importRowBtn.disabled = false; importRowBtn.textContent = original; return; }
-            
-            const sel = matchSel.value;
-            if (sel === "") {
-              // User chose to skip this row
-              await api(`/results/commit`, {
-                method: "POST",
-                body: {
-                  member_id: mid,
-                  taken_at: dateInput.value,
-                  document_id: doc.id,
-                  items: [],
-                  force: true
-                }
-              });
-              toast("Skipped row");
-              renderReviewDoc(main);
-              return;
-            }
-            
-            let typeId;
-            if (sel === "__new__") {
-              const created = await api("/test-types", { method: "POST", body: {
-                name: item.test_name,
-                canonical_unit: unitInput.value.trim(),
-                ref_low: item.ref_low ?? null,
-                ref_high: item.ref_high ?? null,
-              } });
-              typeId = created.id;
-              await loadCore();
-            } else {
-              typeId = Number(sel);
-            }
-            
-            const commitItem = isQual ? {
-              test_type_id: typeId,
-              value: null,
-              value_text: valInput.value.trim(),
-              unit: "",
-              flag: flagInput.value.trim() || null,
-              note: null,
-              document_item_id: item.id
-            } : {
-              test_type_id: typeId,
-              value: Number(valInput.value),
-              unit: unitInput.value.trim(),
-              qualifier: item.qualifier ?? null,
-              ref_low: item.ref_low ?? null,
-              ref_high: item.ref_high ?? null,
-              note: null,
-              document_item_id: item.id
-            };
-            
-            await api(`/documents/${doc.id}/items/${item.id}/import`, {
-              method: "POST",
-              body: {
-                member_id: mid,
-                taken_at: dateInput.value,
-                item: commitItem
-              }
-            });
-            toast(`Successfully imported "${item.test_name}"`);
-            renderReviewDoc(main);
-          } catch (err) {
-            warn.textContent = err.message;
-            warn.style.display = "block";
-            importRowBtn.disabled = false;
-            importRowBtn.textContent = original;
-          }
-        }
-      }, "Import");
+      const importCb = el("input", { type: "checkbox", checked: "" });
       
       const rowEl = el("div", { class: "review-row", style: "align-items: center;" }, [
+        el("div", { style: "display: flex; align-items: center; justify-content: center;" }, importCb),
         rowLabel,
         valInput, unitInput, flagInput,
-        el("div", { style: "display:flex; justify-content:center;" }, importRowBtn),
       ]);
       
       body.append(rowEl, warn);
-      rows.push({ matchSel, valInput, unitInput, flagInput, warn, item, isQual });
+      rows.push({ importCb, matchSel, valInput, unitInput, flagInput, warn, item, isQual });
     });
     
     const commitBtn = el("button", { class: "btn btn-primary", onclick: async () => {
@@ -2002,6 +1931,7 @@ function renderReview(mount, doc, memberId, result, main) {
       try {
         const items = [];
         for (const r of rows) {
+          if (!r.importCb.checked) continue; // user deselected this row
           const sel = r.matchSel.value;
           if (sel === "") continue; // explicitly skipped
           let typeId;
@@ -2035,7 +1965,7 @@ function renderReview(mount, doc, memberId, result, main) {
             document_item_id: r.item.id
           });
         }
-        if (!items.length) { toast("Nothing to save — every row is set to skip"); commitBtn.disabled = false; commitBtn.textContent = original; return; }
+        if (!items.length) { toast("No items selected for import"); commitBtn.disabled = false; commitBtn.textContent = original; return; }
         const mid = typeof memberId === "function" ? memberId() : memberId;
         if (!mid) { toast("Choose a family member first"); commitBtn.disabled = false; commitBtn.textContent = original; return; }
         const res = await commitResults({
