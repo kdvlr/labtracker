@@ -1245,14 +1245,19 @@ def commit_results(req: CommitReq, request: Request):
             
             # Recalculate document status
             total_count = conn.execute("SELECT COUNT(*) FROM document_items WHERE document_id = ?", (req.document_id,)).fetchone()[0]
+            needs_review_count = conn.execute("SELECT COUNT(*) FROM document_items WHERE document_id = ? AND status = 'needs_review'", (req.document_id,)).fetchone()[0]
             imported_count = conn.execute("SELECT COUNT(*) FROM document_items WHERE document_id = ? AND status = 'imported'", (req.document_id,)).fetchone()[0]
             
-            if imported_count == total_count:
-                new_status = 'fully_imported'
-            elif imported_count > 0:
-                new_status = 'partially_imported'
+            if needs_review_count > 0:
+                if imported_count > 0:
+                    new_status = 'partially_imported'
+                else:
+                    new_status = 'needs_review'
             else:
-                new_status = 'needs_review'
+                if imported_count > 0:
+                    new_status = 'fully_imported'
+                else:
+                    new_status = 'failed'
                 
             conn.execute(
                 "UPDATE documents SET status = ?, member_id = COALESCE(member_id, ?) WHERE id = ?",
@@ -1350,14 +1355,19 @@ def import_document_item(doc_id: int, item_id: int, req: ItemImportReq, request:
         
         # Recalculate document status
         total_count = conn.execute("SELECT COUNT(*) FROM document_items WHERE document_id = ?", (doc_id,)).fetchone()[0]
+        needs_review_count = conn.execute("SELECT COUNT(*) FROM document_items WHERE document_id = ? AND status = 'needs_review'", (doc_id,)).fetchone()[0]
         imported_count = conn.execute("SELECT COUNT(*) FROM document_items WHERE document_id = ? AND status = 'imported'", (doc_id,)).fetchone()[0]
         
-        if imported_count == total_count:
-            new_status = 'fully_imported'
-        elif imported_count > 0:
-            new_status = 'partially_imported'
+        if needs_review_count > 0:
+            if imported_count > 0:
+                new_status = 'partially_imported'
+            else:
+                new_status = 'needs_review'
         else:
-            new_status = 'needs_review'
+            if imported_count > 0:
+                new_status = 'fully_imported'
+            else:
+                new_status = 'failed'
             
         conn.execute(
             "UPDATE documents SET status = ?, member_id = COALESCE(member_id, ?) WHERE id = ?",

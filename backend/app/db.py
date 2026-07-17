@@ -90,6 +90,7 @@ def init_db() -> None:
         _migrate_categories_and_zones(conn)
         _migrate_document_lifecycle(conn)
         _migrate_clean_filenames(conn)
+        _migrate_document_status(conn)
     finally:
         conn.close()
 
@@ -268,4 +269,35 @@ def _migrate_clean_filenames(conn) -> None:
             clean_name = d["stored_name"].split("/")[-1]
             if d["filename"] != clean_name:
                 conn.execute("UPDATE documents SET filename = ? WHERE id = ?", (clean_name, d["id"]))
+    conn.commit()
+
+
+def _migrate_document_status(conn) -> None:
+    """Fixes documents whose status is out of sync with their actual remaining document_items review counts."""
+    docs = conn.execute("SELECT id FROM documents").fetchall()
+    for d in docs:
+        doc_id = d["id"]
+        # Check if they have document_items
+        has_items = conn.execute("SELECT 1 FROM document_items WHERE document_id = ? LIMIT 1", (doc_id,)).fetchone()
+        if not has_items:
+            continue
+            
+        needs_review_count = conn.execute("SELECT COUNT(*) FROM document_items WHERE document_id = ? AND status = 'needs_review'", (doc_id,)).fetchone()[0]
+        imported_count = conn.execute("SELECT COUNT(*) FROM document_items WHERE document_id = ? AND status = 'imported'", (doc_id,)).fetchone()[0]
+        
+        if needs_review_count > 0:
+            if imported_count > 0:
+                new_status = 'partially_imported'
+            else:
+                new_status = 'needs_review'
+        else:
+            if imported_count > 0:
+                new_status = 'fully_imported'
+            else:
+                new_status = 'failed'
+                
+        # Update documents table if status changed
+        current_status = conn.execute("SELECT status FROM documents WHERE id = ?", (doc_id,)).fetchone()["status"]
+        if current_status != new_status:
+            conn.execute("UPDATE documents SET status = ? WHERE id = ?", (new_status, doc_id))
     conn.commit()
