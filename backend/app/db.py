@@ -89,6 +89,7 @@ def init_db() -> None:
         conn.commit()
         _migrate_categories_and_zones(conn)
         _migrate_document_lifecycle(conn)
+        _migrate_clean_filenames(conn)
     finally:
         conn.close()
 
@@ -256,4 +257,15 @@ def _migrate_categories_and_zones(conn) -> None:
         desired = json.dumps(ZONES[r["slug"]]) if r["slug"] in ZONES else None
         if r["zones"] != desired:
             conn.execute("UPDATE test_types SET zones = ? WHERE id = ?", (desired, r["id"]))
+    conn.commit()
+
+
+def _migrate_clean_filenames(conn) -> None:
+    """Updates legacy documents to display their clean, organized stored filenames instead of the raw original uploaded names."""
+    docs = conn.execute("SELECT id, stored_name, filename FROM documents").fetchall()
+    for d in docs:
+        if d["stored_name"] and "/" in d["stored_name"]:
+            clean_name = d["stored_name"].split("/")[-1]
+            if d["filename"] != clean_name:
+                conn.execute("UPDATE documents SET filename = ? WHERE id = ?", (clean_name, d["id"]))
     conn.commit()
