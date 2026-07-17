@@ -2270,6 +2270,11 @@ async function renderDocuments(main) {
   const docs = await api("/documents");
   if (!docs.length) { main.append(el("div", { class: "empty" }, "No documents uploaded yet.")); return; }
   
+  const unassignedCount = docs.filter(d => !d.member_name).length;
+  if (state.docFilter.patient === "unassigned" && unassignedCount === 0) {
+    state.docFilter.patient = "";
+  }
+  
   // Scoped Member Pills (chips) at the top
   const memberPills = el("div", { class: "status-tallies", style: "margin-bottom: 16px; flex-wrap: wrap; gap: 8px;" }, [
     el("button", {
@@ -2278,15 +2283,18 @@ async function renderDocuments(main) {
     }, [
       "All Patients",
       el("span", { class: "status-tally-count" }, String(docs.length))
-    ]),
-    el("button", {
+    ])
+  ]);
+  
+  if (unassignedCount > 0) {
+    memberPills.append(el("button", {
       class: "status-tally-btn" + (state.docFilter.patient === "unassigned" ? " active" : ""),
       onclick: () => { state.docFilter.patient = "unassigned"; state.docFilter.limit = 15; renderDocuments(main); }
     }, [
       "Unassigned",
-      el("span", { class: "status-tally-count" }, String(docs.filter(d => !d.member_name).length))
-    ])
-  ]);
+      el("span", { class: "status-tally-count" }, String(unassignedCount))
+    ]));
+  }
   
   state.members.forEach(m => {
     const count = docs.filter(d => d.member_id === m.id).length;
