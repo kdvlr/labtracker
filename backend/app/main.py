@@ -473,26 +473,48 @@ async def upload_document(
                 raise HTTPException(404, "Member not found")
         
         # 1. AI Extraction
+        sanitized_person_name = sanitize_name(member["name"]) if member else "unassigned"
+        member_dir = FILES_DIR / sanitized_person_name
+        member_dir.mkdir(parents=True, exist_ok=True)
+
         provider, model, key = _ai_config(conn)
         try:
             parsed = ai.extract(provider, model, key, data, mime)
-        except ai.AIError as e:
-            raise HTTPException(400, f"AI extraction failed: {str(e)}")
-            
+        except Exception as e:
+            error_msg = f"AI extraction failed: {str(e)}"
+            temp_filename = f"{sanitized_person_name}_Failed_{uuid.uuid4().hex[:8]}{ext}"
+            (member_dir / temp_filename).write_bytes(data)
+            stored_name = f"{sanitized_person_name}/{temp_filename}"
+
+            conn.execute(
+                """INSERT INTO documents (member_id, filename, stored_name, mime, size, status, extraction)
+                   VALUES (?, ?, ?, ?, ?, 'failed', ?)""",
+                (member_id, file.filename, stored_name, mime, len(data), json.dumps({"error": error_msg})),
+            )
+            conn.commit()
+            raise HTTPException(400, error_msg)
+
         patient_name = parsed.get("patient_name")
         report_date = parsed.get("report_date")
         lab_name = parsed.get("lab_name")
-        
+
         # 2. Check if selected name matches the report
         if member:
             if not match_patient_name(member["name"], patient_name):
-                raise HTTPException(
-                    400,
-                    f"Patient name mismatch: Report belongs to '{patient_name or 'Unknown'}', but you selected '{member['name']}'."
+                error_msg = f"Patient name mismatch: Report belongs to '{patient_name or 'Unknown'}', but you selected '{member['name']}'."
+                temp_filename = f"{sanitized_person_name}_Failed_{uuid.uuid4().hex[:8]}{ext}"
+                (member_dir / temp_filename).write_bytes(data)
+                stored_name = f"{sanitized_person_name}/{temp_filename}"
+
+                conn.execute(
+                    """INSERT INTO documents (member_id, filename, stored_name, mime, size, status, extraction)
+                       VALUES (?, ?, ?, ?, ?, 'failed', ?)""",
+                    (member_id, file.filename, stored_name, mime, len(data), json.dumps({"error": error_msg})),
                 )
-        
+                conn.commit()
+                raise HTTPException(400, error_msg)
+
         # 3. Organize in folders and rename appropriately with month/year and collision handling
-        sanitized_person_name = sanitize_name(member["name"]) if member else "unassigned"
         
         # Extract month and year
         test_month = "UnknownMonth"

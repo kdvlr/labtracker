@@ -1561,7 +1561,7 @@ async function renderDocuments(main) {
       el("td", {}, d.member_name || "—"),
       el("td", {}, fmtDate(d.report_date || d.created_at)),
       el("td", {}, String(d.result_count)),
-      el("td", {}, el("span", { class: "pill " + (d.status === "committed" ? "pill-ok" : "pill-L") }, needsReview ? "needs review" : d.status)),
+      el("td", {}, el("span", { class: "pill " + (d.status === "committed" ? "pill-ok" : (d.status === "failed" ? "pill-H" : "pill-L")) }, needsReview ? (d.status === "failed" ? "failed" : "needs review") : d.status)),
       el("td", {}, actions),
     ]));
   }
@@ -1595,25 +1595,31 @@ async function renderReviewDoc(main) {
   const status = el("div", { style: "margin-bottom:14px" }, [el("span", { class: "spinner" }), " Loading extracted results…"]);
   main.append(status, mount);
 
-  const showExtractButton = (msg) => {
+  const showExtractButton = (msg, isErr = false) => {
     status.innerHTML = "";
     status.append(
-      el("div", { class: "page-sub", style: "margin-bottom:10px" }, msg),
+      el("div", { class: isErr ? "warn" : "page-sub", style: "margin-bottom:12px;max-width:600px" }, msg),
       el("button", { class: "btn btn-primary", onclick: async () => {
         status.innerHTML = ""; status.append(el("span", {}, [el("span", { class: "spinner" }), " Extracting with AI… this can take ~20s"]));
         try {
           const result = await api(`/documents/${doc.id}/extract`, { method: "POST", body: {} });
           status.innerHTML = "";
           renderReview(mount, doc, () => Number(memberSel.value), result);
-        } catch (e) { status.innerHTML = ""; status.append(el("div", { class: "warn" }, "Error: " + e.message)); }
-      } }, "Extract with AI"),
+        } catch (e) {
+          showExtractButton("Error: " + e.message, true);
+        }
+      } }, isErr ? "🔄 Retry extraction" : "Extract with AI"),
     );
   };
 
   try {
     const result = await api(`/documents/${doc.id}/extraction`);
     status.innerHTML = "";
-    renderReview(mount, doc, () => Number(memberSel.value), result);
+    if (result && result.error) {
+      showExtractButton("Extraction failed: " + result.error, true);
+    } else {
+      renderReview(mount, doc, () => Number(memberSel.value), result);
+    }
   } catch (e) {
     // No saved extraction yet (older upload) — offer to run it.
     showExtractButton("This report hasn't been read by AI yet.");
