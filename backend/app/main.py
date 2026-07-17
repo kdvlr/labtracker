@@ -8,19 +8,19 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import ai
+from . import access, ai
 from .config import FILES_DIR
 from .db import get_db, init_db, row_to_dict
 from .matching import match_test_type
 from .reference import age_at, categorize, resolve_range
 from .units import compute_flag, known_units, parse_value, to_canonical, to_number
 
-app = FastAPI(title="LabTracker")
+app = FastAPI(title="Rakta Charitra")
 
 
 @app.middleware("http")
@@ -36,6 +36,47 @@ async def add_no_cache_headers(request, call_next):
 @app.on_event("startup")
 def _startup():
     init_db()
+
+
+# ---------------- private-profile access ----------------
+
+def _token(request: Request) -> Optional[str]:
+    return request.headers.get("X-Unlock") or None
+
+
+def _unlocked(conn, request: Request) -> bool:
+    return access.session_valid(conn, _token(request))
+
+
+def _visible(conn, request: Request) -> set:
+    return access.visible_member_ids(conn, _unlocked(conn, request))
+
+
+def _require_member(conn, request: Request, member_id: Optional[int]):
+    """404 on a member this device isn't allowed to see.
+
+    Deliberately 404 and not 403: a private profile shouldn't even confirm it
+    exists to someone who hasn't unlocked.
+    """
+    if not access.can_see(conn, _unlocked(conn, request), member_id):
+        raise HTTPException(404, "Not found")
+
+
+def _require_unlocked(conn, request: Request):
+    """Guard for actions that manage privacy itself. Without this, anyone could
+    simply clear the PIN and the whole scheme would be decorative. Bootstrap
+    case: when no PIN exists yet, the first person may set one."""
+    if access.get_pin_hash(conn) and not _unlocked(conn, request):
+        raise HTTPException(403, "Enter the PIN to change privacy settings")
+
+
+def _require_doc(conn, request: Request, doc_id: int):
+    """A document belongs to whoever it was uploaded for — the stored PDF is the
+    rawest copy of a result, so it inherits that member's visibility."""
+    row = conn.execute("SELECT member_id FROM documents WHERE id = ?", (doc_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Not found")
+    _require_member(conn, request, row["member_id"])
 
 
 # ---------------- helpers ----------------
@@ -77,6 +118,97 @@ def _test_types(conn) -> list:
     return [row_to_dict(r) for r in rows]
 
 
+# ---------------- unlock / PIN ----------------
+
+class PinReq(BaseModel):
+    pin: str
+
+
+class SetPinReq(BaseModel):
+    new_pin: Optional[str] = None   # None/"" clears the PIN (unlocks everything)
+    current_pin: Optional[str] = None
+
+
+@app.get("/api/access")
+def access_state(request: Request):
+    """What this device can see. Safe to call unauthenticated — it reveals only
+    whether a PIN exists, never the PIN or who is hidden."""
+    conn = get_db()
+    try:
+        unlocked = _unlocked(conn, request)
+        n_private = conn.execute("SELECT COUNT(*) c FROM members WHERE private = 1").fetchone()["c"]
+        return {
+            "has_pin": bool(access.get_pin_hash(conn)),
+            "unlocked": unlocked,
+            "private_count": n_private if unlocked else None,
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/api/unlock")
+def unlock(req: PinReq, request: Request):
+    conn = get_db()
+    try:
+        stored = access.get_pin_hash(conn)
+        if not stored:
+            raise HTTPException(400, "No PIN is set")
+        client = request.client.host if request.client else "unknown"
+        wait = access.throttle_check(client)
+        if wait:
+            raise HTTPException(429, f"Too many attempts. Try again in {wait}s.")
+        if not access.verify_pin(req.pin or "", stored):
+            access.throttle_fail(client)
+            raise HTTPException(401, "Incorrect PIN")
+        access.throttle_reset(client)
+        return access.create_session(conn)
+    finally:
+        conn.close()
+
+
+@app.post("/api/lock")
+def lock(request: Request):
+    conn = get_db()
+    try:
+        access.drop_session(conn, _token(request))
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.put("/api/access/pin")
+def set_pin(req: SetPinReq, request: Request):
+    """Set, change, or clear the PIN. Requires an unlocked device once a PIN
+    exists — otherwise anyone could clear it and walk in."""
+    conn = get_db()
+    try:
+        stored = access.get_pin_hash(conn)
+        if stored and not _unlocked(conn, request):
+            # Allow a change by presenting the current PIN instead of a session.
+            if not (req.current_pin and access.verify_pin(req.current_pin, stored)):
+                raise HTTPException(403, "Enter the current PIN first")
+        new = (req.new_pin or "").strip()
+        if not new:
+            conn.execute("DELETE FROM settings WHERE key = ?", (access.PIN_SETTING,))
+            conn.execute("UPDATE members SET private = 0")
+            access.drop_all_sessions(conn)
+            conn.commit()
+            return {"has_pin": False, "note": "PIN cleared; all profiles are public again"}
+        err = access.validate_pin_format(new)
+        if err:
+            raise HTTPException(400, err)
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (access.PIN_SETTING, access.hash_pin(new)),
+        )
+        # Changing the PIN must not leave old devices unlocked.
+        access.drop_all_sessions(conn)
+        conn.commit()
+        return {"has_pin": True}
+    finally:
+        conn.close()
+
+
 # ---------------- members ----------------
 
 class Member(BaseModel):
@@ -84,25 +216,29 @@ class Member(BaseModel):
     dob: Optional[str] = None
     sex: Optional[str] = None
     color: Optional[str] = None
+    private: Optional[bool] = None
 
 
 @app.get("/api/members")
-def list_members():
+def list_members(request: Request):
     conn = get_db()
     try:
+        vis = _visible(conn, request)
         rows = conn.execute("SELECT * FROM members ORDER BY id").fetchall()
-        return [dict(r) for r in rows]
+        return [dict(r) for r in rows if r["id"] in vis]
     finally:
         conn.close()
 
 
 @app.post("/api/members")
-def create_member(m: Member):
+def create_member(m: Member, request: Request):
     conn = get_db()
     try:
+        if m.private:
+            _require_unlocked(conn, request)
         cur = conn.execute(
-            "INSERT INTO members (name, dob, sex, color) VALUES (?, ?, ?, ?)",
-            (m.name, m.dob, m.sex, m.color),
+            "INSERT INTO members (name, dob, sex, color, private) VALUES (?, ?, ?, ?, ?)",
+            (m.name, m.dob, m.sex, m.color, 1 if m.private else 0),
         )
         conn.commit()
         row = conn.execute("SELECT * FROM members WHERE id = ?", (cur.lastrowid,)).fetchone()
@@ -112,15 +248,21 @@ def create_member(m: Member):
 
 
 @app.put("/api/members/{member_id}")
-def update_member(member_id: int, m: Member):
+def update_member(member_id: int, m: Member, request: Request):
     conn = get_db()
     try:
-        cur = conn.execute(
-            "UPDATE members SET name = ?, dob = ?, sex = ?, color = ? WHERE id = ?",
-            (m.name, m.dob, m.sex, m.color, member_id),
-        )
-        if cur.rowcount == 0:
+        _require_member(conn, request, member_id)
+        row = conn.execute("SELECT * FROM members WHERE id = ?", (member_id,)).fetchone()
+        if not row:
             raise HTTPException(404, "Not found")
+        # Flipping privacy either way is a privacy change — gate it.
+        private = row["private"] if m.private is None else (1 if m.private else 0)
+        if private != row["private"]:
+            _require_unlocked(conn, request)
+        conn.execute(
+            "UPDATE members SET name = ?, dob = ?, sex = ?, color = ?, private = ? WHERE id = ?",
+            (m.name, m.dob, m.sex, m.color, private, member_id),
+        )
         conn.commit()
         row = conn.execute("SELECT * FROM members WHERE id = ?", (member_id,)).fetchone()
         return dict(row)
@@ -129,9 +271,10 @@ def update_member(member_id: int, m: Member):
 
 
 @app.delete("/api/members/{member_id}")
-def delete_member(member_id: int):
+def delete_member(member_id: int, request: Request):
     conn = get_db()
     try:
+        _require_member(conn, request, member_id)
         conn.execute("DELETE FROM members WHERE id = ?", (member_id,))
         conn.commit()
         return {"ok": True}
@@ -221,11 +364,12 @@ def _calculate_age(dob_str: Optional[str]) -> Optional[int]:
 
 
 @app.post("/api/test-types/{tt_id}/describe")
-def describe_test_type(tt_id: int, member_id: Optional[int] = None, force_refresh: bool = False):
+def describe_test_type(tt_id: int, request: Request, member_id: Optional[int] = None, force_refresh: bool = False):
     """Return a clinical reference description. If member_id is provided,
     generates a dynamic, age-specific and history-aware guide for that member.
     Otherwise, returns the cached generic test description."""
     conn = get_db()
+    _require_member(conn, request, member_id)
     try:
         row = conn.execute("SELECT * FROM test_types WHERE id = ?", (tt_id,)).fetchone()
         if not row:
@@ -455,9 +599,15 @@ def match_patient_name(member_name: str, patient_name: str) -> bool:
 
 @app.post("/api/documents")
 async def upload_document(
+    request: Request,
     file: UploadFile = File(...),
     member_id: Optional[int] = Form(None),
 ):
+    _guard = get_db()
+    try:
+        _require_member(_guard, request, member_id)
+    finally:
+        _guard.close()
     data = await file.read()
     if not data:
         raise HTTPException(400, "Empty file")
@@ -622,16 +772,19 @@ async def upload_document(
 
 
 @app.get("/api/documents")
-def list_documents():
+def list_documents(request: Request):
     conn = get_db()
     try:
+        vis = _visible(conn, request)
         rows = conn.execute(
             """SELECT d.*, m.name AS member_name,
                       (SELECT COUNT(*) FROM results r WHERE r.document_id = d.id) AS result_count
                FROM documents d LEFT JOIN members m ON m.id = d.member_id
                ORDER BY d.created_at DESC"""
         ).fetchall()
-        return [dict(r) for r in rows]
+        # An unattributed upload (member_id NULL) is mid-import so it stays
+        # visible; everything else inherits its member's visibility.
+        return [dict(r) for r in rows if r["member_id"] is None or r["member_id"] in vis]
     finally:
         conn.close()
 
@@ -641,11 +794,13 @@ class ReassignReq(BaseModel):
 
 
 @app.post("/api/documents/{doc_id}/reassign")
-def reassign_document(doc_id: int, req: ReassignReq):
+def reassign_document(doc_id: int, req: ReassignReq, request: Request):
     """Move a document and every result it produced to a different member —
     fixes an import uploaded under the wrong person, without losing the data."""
     conn = get_db()
     try:
+        _require_doc(conn, request, doc_id)
+        _require_member(conn, request, req.member_id)
         if not conn.execute("SELECT 1 FROM documents WHERE id = ?", (doc_id,)).fetchone():
             raise HTTPException(404, "Document not found")
         if not conn.execute("SELECT 1 FROM members WHERE id = ?", (req.member_id,)).fetchone():
@@ -661,11 +816,12 @@ def reassign_document(doc_id: int, req: ReassignReq):
 
 
 @app.delete("/api/documents/{doc_id}")
-def delete_document(doc_id: int):
+def delete_document(doc_id: int, request: Request):
     """Delete an entire import: the document, its stored file, and every result
     that was saved from it. Manually-entered results (no document) are untouched."""
     conn = get_db()
     try:
+        _require_doc(conn, request, doc_id)
         doc = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
         if not doc:
             raise HTTPException(404, "Document not found")
@@ -685,9 +841,10 @@ def delete_document(doc_id: int):
 
 
 @app.get("/api/documents/{doc_id}/file")
-def get_document_file(doc_id: int):
+def get_document_file(doc_id: int, request: Request):
     conn = get_db()
     try:
+        _require_doc(conn, request, doc_id)
         row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
         if not row:
             raise HTTPException(404, "Not found")
@@ -705,9 +862,10 @@ class ExtractReq(BaseModel):
 
 
 @app.post("/api/documents/{doc_id}/extract")
-def extract_document(doc_id: int, req: ExtractReq):
+def extract_document(doc_id: int, req: ExtractReq, request: Request):
     conn = get_db()
     try:
+        _require_doc(conn, request, doc_id)
         row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
         if not row:
             raise HTTPException(404, "Not found")
@@ -786,11 +944,12 @@ def extract_document(doc_id: int, req: ExtractReq):
 
 
 @app.get("/api/documents/{doc_id}/extraction")
-def get_extraction(doc_id: int):
+def get_extraction(doc_id: int, request: Request):
     """Return the saved extraction payload for a document so its review can be
     resumed without re-running the AI. 404 if the document was never extracted."""
     conn = get_db()
     try:
+        _require_doc(conn, request, doc_id)
         row = conn.execute("SELECT extraction FROM documents WHERE id = ?", (doc_id,)).fetchone()
         if not row:
             raise HTTPException(404, "Not found")
@@ -835,9 +994,10 @@ def _same_value(a: Optional[float], b: Optional[float]) -> bool:
 
 
 @app.post("/api/results/commit")
-def commit_results(req: CommitReq):
+def commit_results(req: CommitReq, request: Request):
     conn = get_db()
     try:
+        _require_member(conn, request, req.member_id)
         types = {t["id"]: t for t in _test_types(conn)}
         member = conn.execute("SELECT * FROM members WHERE id = ?", (req.member_id,)).fetchone()
         m_sex = member["sex"] if member else None
@@ -946,9 +1106,10 @@ def commit_results(req: CommitReq):
 # ---------------- reading results / trends ----------------
 
 @app.get("/api/results")
-def get_results(member_id: Optional[int] = None, test_type_id: Optional[int] = None):
+def get_results(request: Request, member_id: Optional[int] = None, test_type_id: Optional[int] = None):
     conn = get_db()
     try:
+        _require_member(conn, request, member_id)
         q = """SELECT r.*, t.name AS test_name, t.slug AS test_slug, t.canonical_unit,
                       t.category, t.ref_low AS cat_ref_low, t.ref_high AS cat_ref_high,
                       m.name AS member_name, m.sex AS member_sex, m.dob AS member_dob
@@ -957,6 +1118,13 @@ def get_results(member_id: Optional[int] = None, test_type_id: Optional[int] = N
                JOIN members m ON m.id = r.member_id
                WHERE 1=1"""
         params = []
+        # Unfiltered queries must never spill a private member's rows.
+        vis = _visible(conn, request)
+        if vis:
+            q += f" AND r.member_id IN ({','.join('?' * len(vis))})"
+            params.extend(sorted(vis))
+        else:
+            return []
         if member_id is not None:
             q += " AND r.member_id = ?"
             params.append(member_id)
@@ -1037,101 +1205,11 @@ def _summary_for(conn, member_id: int) -> list:
 
 
 @app.get("/api/members/{member_id}/summary")
-def member_summary(member_id: int):
+def member_summary(member_id: int, request: Request):
     conn = get_db()
     try:
+        _require_member(conn, request, member_id)
         return _summary_for(conn, member_id)
-    finally:
-        conn.close()
-
-
-# ---------------- checkup schedules ----------------
-
-DUE_SOON_DAYS = 30  # "due" window before the target date
-
-
-def _schedule_rows(conn, member_id: int) -> list:
-    """Member's schedules with computed due status from their latest result."""
-    rows = conn.execute(
-        """SELECT s.*, t.name AS test_name, t.slug AS test_slug,
-                  (SELECT MAX(r.taken_at) FROM results r
-                    WHERE r.member_id = s.member_id AND r.test_type_id = s.test_type_id) AS last_at
-           FROM schedules s JOIN test_types t ON t.id = s.test_type_id
-           WHERE s.member_id = ? ORDER BY t.name""",
-        (member_id,),
-    ).fetchall()
-    today = date.today()
-    out = []
-    for r in rows:
-        d = dict(r)
-        if d["last_at"]:
-            try:
-                last = date.fromisoformat(str(d["last_at"])[:10])
-            except ValueError:
-                last = today
-            next_due = last + timedelta(days=round(d["interval_months"] * 30.44))
-            d["next_due"] = next_due.isoformat()
-            if next_due < today:
-                d["due_status"] = "overdue"
-            elif (next_due - today).days <= DUE_SOON_DAYS:
-                d["due_status"] = "due"
-            else:
-                d["due_status"] = "ok"
-        else:
-            # Never tested: the reminder exists precisely because this should be
-            # measured, so treat it as due now.
-            d["next_due"] = None
-            d["due_status"] = "due"
-        out.append(d)
-    return out
-
-
-class ScheduleIn(BaseModel):
-    member_id: int
-    test_type_id: int
-    interval_months: int
-    note: Optional[str] = None
-
-
-@app.get("/api/members/{member_id}/schedules")
-def member_schedules(member_id: int):
-    conn = get_db()
-    try:
-        return _schedule_rows(conn, member_id)
-    finally:
-        conn.close()
-
-
-@app.post("/api/schedules")
-def upsert_schedule(s: ScheduleIn):
-    if s.interval_months < 1:
-        raise HTTPException(400, "Interval must be at least 1 month")
-    conn = get_db()
-    try:
-        if not conn.execute("SELECT 1 FROM members WHERE id = ?", (s.member_id,)).fetchone():
-            raise HTTPException(404, "Member not found")
-        if not conn.execute("SELECT 1 FROM test_types WHERE id = ?", (s.test_type_id,)).fetchone():
-            raise HTTPException(404, "Test type not found")
-        conn.execute(
-            """INSERT INTO schedules (member_id, test_type_id, interval_months, note)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(member_id, test_type_id)
-               DO UPDATE SET interval_months = excluded.interval_months, note = excluded.note""",
-            (s.member_id, s.test_type_id, s.interval_months, s.note),
-        )
-        conn.commit()
-        return {"ok": True}
-    finally:
-        conn.close()
-
-
-@app.delete("/api/schedules/{schedule_id}")
-def delete_schedule(schedule_id: int):
-    conn = get_db()
-    try:
-        conn.execute("DELETE FROM schedules WHERE id = ?", (schedule_id,))
-        conn.commit()
-        return {"ok": True}
     finally:
         conn.close()
 
@@ -1139,9 +1217,10 @@ def delete_schedule(schedule_id: int):
 # ---------------- export ----------------
 
 @app.get("/api/members/{member_id}/export.csv")
-def export_member_csv(member_id: int):
+def export_member_csv(member_id: int, request: Request):
     conn = get_db()
     try:
+        _require_member(conn, request, member_id)
         member = conn.execute("SELECT * FROM members WHERE id = ?", (member_id,)).fetchone()
         if not member:
             raise HTTPException(404, "Member not found")
@@ -1175,9 +1254,13 @@ def export_member_csv(member_id: int):
 
 
 @app.delete("/api/results/{result_id}")
-def delete_result(result_id: int):
+def delete_result(result_id: int, request: Request):
     conn = get_db()
     try:
+        row = conn.execute("SELECT member_id FROM results WHERE id = ?", (result_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Not found")
+        _require_member(conn, request, row["member_id"])
         conn.execute("DELETE FROM results WHERE id = ?", (result_id,))
         conn.commit()
         return {"ok": True}
@@ -1260,9 +1343,10 @@ class AskReq(BaseModel):
 
 
 @app.post("/api/ask")
-def ask(req: AskReq):
+def ask(req: AskReq, request: Request):
     conn = get_db()
     try:
+        _require_member(conn, request, req.member_id)
         member = conn.execute("SELECT * FROM members WHERE id = ?", (req.member_id,)).fetchone()
         if not member:
             raise HTTPException(404, "Member not found")

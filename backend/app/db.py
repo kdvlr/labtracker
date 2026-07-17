@@ -42,6 +42,12 @@ def init_db() -> None:
             )"""
         )
         # Migration: add columns that older databases predate.
+        mcols = {r["name"] for r in conn.execute("PRAGMA table_info(members)")}
+        if "private" not in mcols:
+            # Default 0 — an upgrade must never hide someone's results from them.
+            conn.execute("ALTER TABLE members ADD COLUMN private INTEGER NOT NULL DEFAULT 0")
+            conn.commit()
+
         rcols = {r["name"] for r in conn.execute("PRAGMA table_info(results)")}
         if "qualifier" not in rcols:
             conn.execute("ALTER TABLE results ADD COLUMN qualifier TEXT")

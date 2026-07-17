@@ -1,4 +1,4 @@
-# LabTracker
+# Rakta Charitra
 
 A self-hosted app to track your family's lab test results over time. Upload PDFs,
 photos, or screenshots of lab reports; AI extracts the values; you review and

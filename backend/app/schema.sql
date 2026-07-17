@@ -4,7 +4,19 @@ CREATE TABLE IF NOT EXISTS members (
     dob TEXT,
     sex TEXT,
     color TEXT,
+    -- 1 = only visible once the private PIN has been entered on this device.
+    -- 0 (default) = always visible, no PIN, no interaction. The people who use
+    -- this app daily should never meet a lock screen.
+    private INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- A device that has entered the correct PIN. Presence of a live row here is
+-- what "unlocked" means; deleting rows locks every device at once.
+CREATE TABLE IF NOT EXISTS unlock_sessions (
+    token TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    expires_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS test_types (
@@ -76,14 +88,3 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT
 );
 
--- Recurring checkup reminders: "this member should retest this marker every N
--- months". Due status is computed from the member's latest result for the test.
-CREATE TABLE IF NOT EXISTS schedules (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    member_id INTEGER NOT NULL REFERENCES members(id) ON DELETE CASCADE,
-    test_type_id INTEGER NOT NULL REFERENCES test_types(id) ON DELETE CASCADE,
-    interval_months INTEGER NOT NULL,
-    note TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(member_id, test_type_id)
-);
