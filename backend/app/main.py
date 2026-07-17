@@ -403,24 +403,27 @@ def describe_test_type(tt_id: int, request: Request, member_id: Optional[int] = 
                 sex = member["sex"] or "Not specified"
                 age_str = f"{age} years old" if age is not None else "Age not specified"
                 
-                # Fetch member's latest results for this biomarker
-                latest = conn.execute(
+                # Fetch member's historical results for this biomarker
+                history_rows = conn.execute(
                     """SELECT value, unit, value_canonical, value_text, flag, taken_at 
                        FROM results 
                        WHERE member_id = ? AND test_type_id = ? 
-                       ORDER BY taken_at DESC LIMIT 1""",
+                       ORDER BY taken_at DESC""",
                     (member_id, tt_id)
-                ).fetchone()
+                ).fetchall()
                 
-                latest_str = "No results on file yet."
-                if latest:
-                    if latest["value_canonical"] is not None:
-                        orig_val = f"{latest['value']} {latest['unit']}"
-                        canon_val = f"{round(latest['value_canonical'], 3)} {row['canonical_unit'] or ''}"
-                        flag_str = f" (Flagged as {latest['flag']})" if latest['flag'] else ""
-                        latest_str = f"Latest reading on {latest['taken_at']}: {canon_val} {flag_str} (reported as {orig_val})."
+                history_list = []
+                for hr in history_rows:
+                    if hr["value_canonical"] is not None:
+                        orig_val = f"{hr['value']} {hr['unit']}"
+                        canon_val = f"{round(hr['value_canonical'], 3)} {row['canonical_unit'] or ''}"
+                        flag_str = f" (Flagged: {hr['flag']})" if hr['flag'] else ""
+                        history_list.append(f"- {hr['taken_at']}: {canon_val}{flag_str} (reported as {orig_val})")
                     else:
-                        latest_str = f"Latest reading on {latest['taken_at']}: {latest['value_text'] or latest['value']}."
+                        flag_str = f" (Flagged: {hr['flag']})" if hr['flag'] else ""
+                        history_list.append(f"- {hr['taken_at']}: {hr['value_text'] or hr['value']}{flag_str}")
+                
+                history_str = "\n".join(history_list) if history_list else "No results on file"
 
                 # Fetch other test types in the same category
                 related_rows = conn.execute(
@@ -430,36 +433,38 @@ def describe_test_type(tt_id: int, request: Request, member_id: Optional[int] = 
                     (row["category"], tt_id)
                 ).fetchall()
                 
-                # Fetch latest readings for all related test types
+                # Fetch historical readings for all related test types
                 related_readings = []
                 for rr in related_rows:
-                    latest_rel = conn.execute(
+                    rel_history = conn.execute(
                         """SELECT value_canonical, value_text, flag, taken_at 
                            FROM results 
                            WHERE member_id = ? AND test_type_id = ? 
-                           ORDER BY taken_at DESC LIMIT 1""",
+                           ORDER BY taken_at DESC""",
                         (member_id, rr["id"])
-                    ).fetchone()
-                    if latest_rel:
-                        if latest_rel['value_canonical'] is not None:
-                            val_str = f"{round(latest_rel['value_canonical'], 3)} {rr['canonical_unit'] or ''}"
-                        else:
-                            val_str = str(latest_rel['value_text'] or latest_rel['value'] or '')
-                        flag_str = f" ({latest_rel['flag']})" if latest_rel['flag'] else ""
-                        related_readings.append(f"- {rr['name']}: {val_str}{flag_str} (taken {latest_rel['taken_at']})")
+                    ).fetchall()
+                    if rel_history:
+                        h_lines = []
+                        for rh in rel_history:
+                            if rh['value_canonical'] is not None:
+                                val_str = f"{round(rh['value_canonical'], 3)} {rr['canonical_unit'] or ''}"
+                            else:
+                                val_str = str(rh['value_text'] or rh['value'] or '')
+                            flag_str = f" ({rh['flag']})" if rh['flag'] else ""
+                            h_lines.append(f"  * {rh['taken_at']}: {val_str}{flag_str}")
+                        related_readings.append(f"- {rr['name']}:\n" + "\n".join(h_lines))
                     else:
                         related_readings.append(f"- {rr['name']}: No readings on file")
-
                 
                 related_readings_str = "\n".join(related_readings) if related_readings else "none"
 
                 # Deliberately no name: the provider needs age/sex to interpret a
                 # value, but never who the person is. Keep identifiers local.
                 member_context = (
-                    f"Write this clinical reference guide specifically for the patient: "
-                    f"Age: {age_str}, Sex: {sex}.\n"
-                    f"Patient's Latest Result for {row['name']}: {latest_str}\n"
-                    f"Patient's Latest Results for Related Tests in the same panel ({row['category']}):\n{related_readings_str}\n"
+                    f"Write this clinical reference guide specifically for the patient:\n"
+                    f"Age: {age_str}, Sex: {sex}.\n\n"
+                    f"Patient's Historical Results for {row['name']} (Main Test):\n{history_str}\n\n"
+                    f"Patient's Historical Results for Related Tests in the same panel ({row['category']}):\n{related_readings_str}\n"
                 )
 
         if member_id is not None and member_context:
@@ -473,7 +478,7 @@ def describe_test_type(tt_id: int, request: Request, member_id: Optional[int] = 
                 f"2. **high**: Ramifications of a high level.\n"
                 f"3. **low**: Ramifications of a low level.\n"
                 f"4. **age_related**: Note any relevant observations or normal shifts for a {age_str} patient.\n"
-                f"5. **related_tests**: Summarize and interpret how the patient's latest reading for this biomarker tracks and integrates with their latest results for the related tests in the same panel (listed below). Explain what the combined clinical picture means in plain language:\n{related_readings_str}"
+                f"5. **related_tests**: Summarize and interpret the patient's historical trends for this biomarker, noting any changes over time. Interpret how these trends track and integrate with the historical results for the related tests in the same panel (listed below). Explain what the combined clinical picture and trajectory means in plain language:\n{related_readings_str}"
             )
 
             try:
