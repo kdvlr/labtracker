@@ -854,7 +854,11 @@ function rangeBar(value, zones) {
   if (value > d1) d1 = value + m;
   const span = (d1 - d0) || 1;
   const pos = (x) => Math.max(0, Math.min(100, ((x - d0) / span) * 100));
-  const fill = { green: "var(--range-in)", amber: "var(--range-warn)", red: "var(--range-out)" };
+  const vz = zoneOf(value, zones) || { c: "green" };
+  const isAbnormal = vz.c === "red" || vz.c === "amber";
+  const fill = isAbnormal
+    ? { green: "var(--good-soft)", amber: "var(--low)", red: "var(--high)" }
+    : { green: "var(--range-in)", amber: "var(--range-warn)", red: "var(--range-out)" };
 
   const track = el("div", { class: "rbar-track" });
   let prev = d0;
@@ -867,7 +871,6 @@ function rangeBar(value, zones) {
   
   const wrap = el("div", { style: "position: relative;" });
   wrap.append(track);
-  const vz = zoneOf(value, zones);
   wrap.append(el("div", { class: "rbar-marker " + vz.c, style: `left:${pos(value).toFixed(1)}%` }, fmtNum(value)));
 
   const labels = el("div", { class: "rbar-labels" });
