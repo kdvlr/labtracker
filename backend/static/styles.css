@@ -598,6 +598,33 @@ textarea { resize: vertical; }
   .modal-actions .btn { width: 100%; justify-content: center; }
   table { font-size: 15px; }
   th, td { padding: 12px 10px; }
+
+  /* Timeline documents mobile styles */
+  .year-jump-rail { display: none !important; }
+  .timeline-layout-container { gap: 0; }
+  .doc-timeline-card {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+  .doc-card-actions {
+    width: 100%;
+    justify-content: space-between;
+    border-top: 1px solid var(--hairline);
+    padding-top: 8px;
+  }
+  .document-actions-card {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+  .document-actions-card > div {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .document-actions-card select {
+    flex: 1;
+  }
 }
 
 /* structured description blocks */
