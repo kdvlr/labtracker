@@ -3091,10 +3091,10 @@ async function renderPrivacyCard() {
     return card;
   }
 
-  if (!state.access.unlocked) {
+  if (!state.settingsUnlockToken && !state.access.unlocked) {
     card.append(
       el("p", { class: "modal-lead" }, "Enter the PIN to change privacy settings on this device."),
-      el("button", { class: "btn btn-primary", onclick: openUnlockModal }, "Enter PIN"),
+      el("button", { class: "btn btn-primary", onclick: () => openUnlockModal() }, "Enter PIN"),
     );
     return card;
   }
