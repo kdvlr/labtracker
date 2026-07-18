@@ -583,7 +583,7 @@ function renderSidebar() {
       class: "member-item" + (m.id === state.activeMember && state.view === "overview" ? " active" : ""),
       onclick: () => { navigateTo("overview", { activeMember: m.id }); },
 
-    }, [el("span", { class: "avatar", style: `background:${m.color || "#2f6fe0"}` }, initials(m.name)), m.name]));
+    }, [el("span", { class: "avatar", style: `background:${m.color || "#5c554e"}` }, initials(m.name)), m.name]));
   }
 }
 
@@ -977,7 +977,7 @@ async function renderHousehold(main) {
 
     const card = el("div", { class: "hh-card" }, [
       el("div", { class: "hh-head", onclick: () => { navigateTo("overview", { activeMember: m.id }); } }, [
-        el("span", { class: "avatar", style: `background:${m.color || "#2f6fe0"}` }, initials(m.name)),
+        el("span", { class: "avatar", style: `background:${m.color || "#5c554e"}` }, initials(m.name)),
         el("div", { style: "min-width:0" }, [
           el("div", { class: "hh-name" }, m.name),
           el("div", { class: "hh-meta" }, summary.length
@@ -1488,7 +1488,7 @@ function familySection(t, displayUnit, convert) {
     for (const r of rows) (groups[r.member_id] ||= []).push(r);
     const series = state.members
       .filter((m) => (groups[m.id] || []).length)
-      .map((m) => ({ name: m.name, color: m.color || "#2f6fe0", points: groups[m.id] }));
+      .map((m) => ({ name: m.name, color: m.color || "#5c554e", points: groups[m.id] }));
     if (series.length < 2) {
       mount.append(el("div", { class: "empty", style: "padding:36px 20px" },
         series.length ? `Only ${series[0].name} has ${t.name} results so far. Add results for other family members to compare.` : "No results yet."));
@@ -2207,7 +2207,7 @@ async function renderDocuments(main) {
           const visibleDocs = expanded ? attentionDocs : attentionDocs.slice(0, 5);
           visibleDocs.forEach(d => {
             const initialsStr = d.member_name ? d.member_name.trim().slice(0, 1).toUpperCase() : "?";
-            const colorStr = d.member_name ? (state.members.find(m => m.id === d.member_id)?.color || "#2f6fe0") : "#a0a0a0";
+            const colorStr = d.member_name ? (state.members.find(m => m.id === d.member_id)?.color || "#5c554e") : "#a0a0a0";
             const statusTextMap = {
               "needs_review": "Needs review",
               "partially_imported": "Partially imported",
@@ -2472,7 +2472,7 @@ async function renderDocuments(main) {
       const cardsDiv = el("div", { class: "doc-timeline-cards" });
       group.docs.forEach(d => {
         const initialsStr = d.member_name ? d.member_name.trim().slice(0, 1).toUpperCase() : "?";
-        const colorStr = d.member_name ? (state.members.find(m => m.id === d.member_id)?.color || "#2f6fe0") : "#a0a0a0";
+        const colorStr = d.member_name ? (state.members.find(m => m.id === d.member_id)?.color || "#5c554e") : "#a0a0a0";
         
         const statusTextMap = {
           "needs_review": "Needs review",
