@@ -228,7 +228,9 @@ async function api(path, opts = {}) {
                            !path.includes("/summary") && 
                            !path.includes("/documents") && 
                            !path.includes("/results")) ||
-                          path.startsWith("/test-types")
+                          (path.startsWith("/test-types") && 
+                           !path.includes("/describe")) ||
+                          path.startsWith("/access")
                         ));
   let tok = isSettingsPath ? state.settingsUnlockToken : getUnlockToken();
   if (opts.token !== undefined) {
