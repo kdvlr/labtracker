@@ -1540,6 +1540,154 @@ def member_summary(member_id: int, request: Request):
         conn.close()
 
 
+# ---------------- whole-member AI health analysis ----------------
+
+def _analysis_inputs(conn, member_id: int):
+    """Build the full-history prompt body and a hash of the underlying data.
+
+    The hash lets the client tell when a cached analysis has gone stale because
+    new results arrived. No member name is included — the model gets age and sex
+    only, per the privacy rule.
+    """
+    member = conn.execute("SELECT * FROM members WHERE id = ?", (member_id,)).fetchone()
+    summary = _summary_for(conn, member_id)
+    # Every raw result, so the model sees the real trend, not just the latest.
+    rows = conn.execute(
+        """SELECT r.test_type_id, r.taken_at, r.value_canonical, r.value_text, r.flag,
+                  r.qualifier, t.name, t.canonical_unit, t.category
+           FROM results r JOIN test_types t ON t.id = r.test_type_id
+           WHERE r.member_id = ? ORDER BY t.category, t.name, r.taken_at""",
+        (member_id,),
+    ).fetchall()
+    if not rows:
+        return None, None, None
+
+    hist = {}
+    for r in rows:
+        hist.setdefault(r["test_type_id"], []).append(r)
+
+    # In/out status per marker uses the same resolved range the UI shows.
+    status_by_id = {}
+    for s in summary:
+        v = s["latest"]["value_canonical"] if s.get("latest") else None
+        lo, hi = s.get("ref_low"), s.get("ref_high")
+        if v is None:
+            status_by_id[s["test_type_id"]] = "text/qualitative"
+        elif (lo is not None and v < lo) or (hi is not None and v > hi):
+            status_by_id[s["test_type_id"]] = "OUT OF RANGE"
+        else:
+            status_by_id[s["test_type_id"]] = "in range"
+    ref_by_id = {s["test_type_id"]: (s.get("ref_low"), s.get("ref_high")) for s in summary}
+
+    lines = []
+    for tid, points in hist.items():
+        name = points[0]["name"]
+        unit = points[0]["canonical_unit"] or ""
+        cat = points[0]["category"] or "Other"
+        lo, hi = ref_by_id.get(tid, (None, None))
+        ref = ""
+        if lo is not None and hi is not None:
+            ref = f" (normal {lo}–{hi} {unit})"
+        elif hi is not None:
+            ref = f" (normal < {hi} {unit})"
+        elif lo is not None:
+            ref = f" (normal > {lo} {unit})"
+        series = []
+        for p in points:
+            if p["value_canonical"] is not None:
+                val = f"{round(p['value_canonical'], 3)}"
+                if p["qualifier"]:
+                    val = f"{p['qualifier']}{val}"
+            else:
+                val = p["value_text"] or "—"
+            series.append(f"{str(p['taken_at'])[:10]}: {val}")
+        status = status_by_id.get(tid, "")
+        lines.append(f"[{cat}] {name}{ref} — currently {status}\n    history: " + "; ".join(series))
+
+    age = age_at(member["dob"]) if member and member["dob"] else None
+    sex = (member["sex"] if member else None) or "not specified"
+    age_str = f"{age} years old" if age is not None else "age not specified"
+    body = (
+        f"Patient: {age_str}, sex {sex}. {len(hist)} biomarkers tracked.\n\n"
+        "Complete lab history (every marker, oldest to newest reading):\n\n"
+        + "\n".join(lines)
+    )
+    import hashlib
+    h = hashlib.sha256(
+        "|".join(f"{r['test_type_id']}:{r['taken_at']}:{r['value_canonical']}:{r['value_text']}" for r in rows).encode()
+    ).hexdigest()
+    return body, h, len(hist)
+
+
+def _stored_analysis(conn, member_id: int):
+    row = conn.execute(
+        "SELECT analysis, results_hash, generated_at FROM member_analyses WHERE member_id = ?",
+        (member_id,),
+    ).fetchone()
+    if not row:
+        return None
+    try:
+        analysis = json.loads(row["analysis"])
+    except (ValueError, TypeError):
+        return None
+    return {"analysis": analysis, "results_hash": row["results_hash"], "generated_at": row["generated_at"]}
+
+
+@app.get("/api/members/{member_id}/analysis")
+def get_member_analysis(member_id: int, request: Request):
+    """Return the cached whole-member analysis, flagged stale if results changed
+    since it was generated. Never triggers an AI call on its own."""
+    conn = get_db()
+    try:
+        _require_member(conn, request, member_id)
+        stored = _stored_analysis(conn, member_id)
+        if not stored:
+            return {"analysis": None, "generated_at": None, "stale": False, "has_data": bool(_summary_for(conn, member_id))}
+        _, cur_hash, marker_count = _analysis_inputs(conn, member_id)
+        return {
+            "analysis": stored["analysis"],
+            "generated_at": stored["generated_at"],
+            "stale": cur_hash is not None and cur_hash != stored["results_hash"],
+            "has_data": True,
+            "marker_count": marker_count,
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/api/members/{member_id}/analysis")
+def generate_member_analysis(member_id: int, request: Request):
+    """Generate (or regenerate) the whole-member analysis and cache it."""
+    conn = get_db()
+    try:
+        _require_member(conn, request, member_id)
+        body, results_hash, marker_count = _analysis_inputs(conn, member_id)
+        if not body:
+            raise HTTPException(400, "No results to analyze yet")
+        provider, model, key = _ai_config(conn)
+        system_prompt = _get_setting(conn, "prompt_health_analysis", ai.HEALTH_ANALYSIS_SYSTEM)
+        try:
+            text = ai.chat(provider, model, key, system_prompt, body)
+            analysis = ai._extract_json(text)
+        except ai.AIError as e:
+            raise HTTPException(400, str(e))
+        except (ValueError, KeyError) as e:
+            raise HTTPException(400, f"Could not parse AI analysis: {e}")
+        conn.execute(
+            """INSERT INTO member_analyses (member_id, analysis, results_hash, generated_at)
+               VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(member_id) DO UPDATE SET
+                 analysis = excluded.analysis, results_hash = excluded.results_hash,
+                 generated_at = excluded.generated_at""",
+            (member_id, json.dumps(analysis), results_hash),
+        )
+        conn.commit()
+        row = conn.execute("SELECT generated_at FROM member_analyses WHERE member_id = ?", (member_id,)).fetchone()
+        return {"analysis": analysis, "generated_at": row["generated_at"], "stale": False, "marker_count": marker_count}
+    finally:
+        conn.close()
+
+
 # ---------------- export ----------------
 
 @app.get("/api/members/{member_id}/export.csv")
@@ -1608,6 +1756,7 @@ class SettingsIn(BaseModel):
     prompt_qa_system: Optional[str] = None
     prompt_biomarker_personalized: Optional[str] = None
     prompt_biomarker_standard: Optional[str] = None
+    prompt_health_analysis: Optional[str] = None
 
 
 @app.get("/api/settings")
@@ -1627,6 +1776,7 @@ def get_settings(request: Request):
         out.setdefault("prompt_qa_system", ai.QA_SYSTEM)
         out.setdefault("prompt_biomarker_personalized", ai.BIOMARKER_PERSONALIZED_SYSTEM)
         out.setdefault("prompt_biomarker_standard", ai.BIOMARKER_STANDARD_SYSTEM)
+        out.setdefault("prompt_health_analysis", ai.HEALTH_ANALYSIS_SYSTEM)
         
         # Add commit SHA
         import os
@@ -1718,7 +1868,8 @@ def get_settings_defaults(request: Request):
             "prompt_extraction_system": ai.EXTRACTION_SYSTEM,
             "prompt_qa_system": ai.QA_SYSTEM,
             "prompt_biomarker_personalized": ai.BIOMARKER_PERSONALIZED_SYSTEM,
-            "prompt_biomarker_standard": ai.BIOMARKER_STANDARD_SYSTEM
+            "prompt_biomarker_standard": ai.BIOMARKER_STANDARD_SYSTEM,
+            "prompt_health_analysis": ai.HEALTH_ANALYSIS_SYSTEM
         }
     finally:
         conn.close()

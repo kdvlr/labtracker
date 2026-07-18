@@ -246,6 +246,14 @@ const fmtNum = (n) => (n == null ? "—" : Number(n).toLocaleString(undefined, {
 // comparator the lab printed.
 const fmtVal = (n, qualifier) => (n == null ? "—" : (qualifier ? qualifier : "") + fmtNum(n));
 const fmtDate = (s) => (s ? new Date(s).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "—");
+// SQLite CURRENT_TIMESTAMP is UTC without a zone marker; append Z so it renders
+// in the viewer's local time rather than as if it were already local.
+const fmtDateTime = (s) => {
+  if (!s) return "—";
+  const iso = /Z|[+-]\d\d:?\d\d$/.test(s) ? s : s.replace(" ", "T") + "Z";
+  const d = new Date(iso);
+  return isNaN(d) ? s : d.toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+};
 const today = () => new Date().toISOString().slice(0, 10);
 
 function ageOf(dob) {
@@ -634,6 +642,139 @@ function render() {
   else if (state.view === "report") renderReport(main);
 }
 
+// ---------------- whole-member AI health analysis ----------------
+const SEVERITY = {
+  urgent: { cls: "sev-urgent", label: "Urgent", icon: "🔴" },
+  monitor: { cls: "sev-monitor", label: "Monitor", icon: "🟡" },
+  minor: { cls: "sev-minor", label: "Minor", icon: "⚪" },
+};
+
+async function renderHealthAnalysis(mount, member) {
+  mount.innerHTML = "";
+  let data;
+  try { data = await api(`/members/${member.id}/analysis`); }
+  catch { return; }              // locked or error — stay quiet, not a blocker
+  if (!data.has_data) return;
+
+  const card = el("div", { class: "analysis-card" });
+  mount.append(card);
+
+  const generate = async () => {
+    card.innerHTML = "";
+    card.append(el("div", { class: "analysis-loading" }, [
+      el("span", { class: "spinner" }),
+      el("div", {}, [
+        el("div", { style: "font-weight:600" }, "Analyzing the full picture…"),
+        el("div", { class: "page-sub", style: "margin:4px 0 0" }, `Reviewing all ${data.marker_count || ""} biomarkers and their history. This can take up to a minute.`),
+      ]),
+    ]));
+    try {
+      const fresh = await api(`/members/${member.id}/analysis`, { method: "POST", body: {} });
+      renderAnalysisBody(card, fresh, member, generate);
+    } catch (e) {
+      card.innerHTML = "";
+      card.append(el("div", { class: "analysis-head" }, el("div", { class: "analysis-title" }, "🩺 Full Health Analysis")));
+      card.append(el("div", { class: "warn", style: "margin-top:10px" }, "Couldn't generate the analysis: " + e.message));
+      card.append(el("button", { class: "btn", style: "margin-top:12px", onclick: generate }, "Try again"));
+    }
+  };
+
+  if (!data.analysis) {
+    // Never generated — a clear one-tap call to action.
+    card.append(
+      el("div", { class: "analysis-head" }, el("div", { class: "analysis-title" }, "🩺 Full Health Analysis")),
+      el("p", { class: "page-sub", style: "margin:6px 0 14px" }, "Let AI review every biomarker and its full history together — spotting trends, cross-marker patterns, and anything worth discussing with a doctor."),
+      el("button", { class: "btn btn-primary", onclick: generate }, "✨ Analyze all results"),
+    );
+    return;
+  }
+  renderAnalysisBody(card, data, member, generate);
+}
+
+function renderAnalysisBody(card, data, member, regenerate) {
+  card.innerHTML = "";
+  const a = data.analysis || {};
+
+  const genLabel = data.generated_at ? `Generated ${fmtDateTime(data.generated_at)}` : "";
+  card.append(el("div", { class: "analysis-head" }, [
+    el("div", {}, [
+      el("div", { class: "analysis-title" }, "🩺 Full Health Analysis"),
+      genLabel ? el("div", { class: "page-sub", style: "margin-top:2px;font-size:13px" }, genLabel) : null,
+    ]),
+    el("button", { class: "btn btn-sm", onclick: regenerate }, "↻ Regenerate"),
+  ]));
+
+  if (data.stale) {
+    card.append(el("div", { class: "analysis-stale" }, [
+      "New results have been added since this analysis. ",
+      el("button", { class: "linkish", onclick: regenerate }, "Regenerate"),
+    ]));
+  }
+
+  if (a.headline) card.append(el("p", { class: "analysis-headline" }, a.headline));
+
+  // Problem areas — ranked, color-coded by severity.
+  const problems = Array.isArray(a.problem_areas) ? a.problem_areas : [];
+  if (problems.length) {
+    card.append(el("div", { class: "analysis-section-label" }, "Areas to look at"));
+    for (const p of problems) {
+      const sev = SEVERITY[p.severity] || SEVERITY.minor;
+      const block = el("div", { class: "problem-card " + sev.cls }, [
+        el("div", { class: "problem-head" }, [
+          el("span", { class: "problem-title" }, p.title || "Concern"),
+          el("span", { class: "sev-pill" }, `${sev.icon} ${sev.label}${p.trend && p.trend !== "stable" ? " · " + p.trend : ""}`),
+        ]),
+        p.explanation ? el("p", { class: "problem-body" }, p.explanation) : null,
+        Array.isArray(p.markers) && p.markers.length
+          ? el("div", { class: "problem-markers" }, p.markers.map((m) => el("span", { class: "marker-chip" }, m)))
+          : null,
+        Array.isArray(p.actions) && p.actions.length
+          ? el("ul", { class: "problem-actions" }, p.actions.map((s) => el("li", {}, s)))
+          : null,
+      ].filter(Boolean));
+      card.append(block);
+    }
+  } else {
+    card.append(el("div", { class: "analysis-allclear" }, "✓ No specific concerns flagged in this review."));
+  }
+
+  // Trends
+  const trends = Array.isArray(a.trends) ? a.trends : [];
+  if (trends.length) {
+    card.append(el("div", { class: "analysis-section-label" }, "Notable trends over time"));
+    const list = el("div", { class: "trend-list" });
+    for (const t of trends) {
+      const up = t.direction === "improving";
+      list.append(el("div", { class: "trend-row" }, [
+        el("span", { class: "trend-arrow " + (up ? "good" : "warn") }, up ? "↗" : "↘"),
+        el("span", {}, [el("strong", {}, (t.marker || "") + ": "), t.detail || ""]),
+      ]));
+    }
+    card.append(list);
+  }
+
+  // Positives
+  const positives = Array.isArray(a.positives) ? a.positives : [];
+  if (positives.length) {
+    card.append(el("div", { class: "analysis-section-label" }, "What's going well"));
+    card.append(el("ul", { class: "positive-list" }, positives.map((s) => el("li", {}, s))));
+  }
+
+  // Doctor questions
+  const dq = Array.isArray(a.doctor_questions) ? a.doctor_questions : [];
+  if (dq.length) {
+    card.append(el("div", { class: "analysis-section-label" }, "Questions for your doctor"));
+    card.append(el("ul", { class: "doctor-list" }, dq.map((s) => el("li", {}, s))));
+  }
+
+  if (a.age_context) {
+    card.append(el("div", { class: "analysis-section-label" }, "In the context of age"));
+    card.append(el("p", { class: "problem-body", style: "margin:0" }, a.age_context));
+  }
+
+  card.append(el("p", { class: "analysis-disclaimer" }, a.disclaimer || "This is an automated summary, not a medical diagnosis. Always consult a clinician."));
+}
+
 async function renderOverview(main) {
   if (!state.activeMember) {
     main.append(el("div", { class: "card empty-card empty" }, [
@@ -669,6 +810,11 @@ async function renderOverview(main) {
     ]));
     return;
   }
+  // Whole-member AI analysis — the "what does all of this mean together" card.
+  const analysisMount = el("div");
+  main.append(analysisMount);
+  renderHealthAnalysis(analysisMount, member);
+
   // Search on top.
   const search = el("input", { type: "text", placeholder: "Search biomarkers…", value: state.search || "" });
   search.addEventListener("input", () => { state.search = search.value; paint(); });
@@ -3041,6 +3187,7 @@ async function renderSettings(main) {
     mkPrompt("AI Q&A Assistant Prompt", "prompt_qa_system", s.prompt_qa_system),
     mkPrompt("Biomarker Explanation (Personalized)", "prompt_biomarker_personalized", s.prompt_biomarker_personalized),
     mkPrompt("Biomarker Explanation (Standard)", "prompt_biomarker_standard", s.prompt_biomarker_standard),
+    mkPrompt("Full Health Analysis", "prompt_health_analysis", s.prompt_health_analysis),
     el("div", { style: "display: flex;" }, [savePromptsBtn, resetPromptsBtn])
   );
 

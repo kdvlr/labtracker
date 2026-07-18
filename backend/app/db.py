@@ -42,6 +42,17 @@ def init_db() -> None:
                 FOREIGN KEY (test_type_id) REFERENCES test_types(id) ON DELETE CASCADE
             )"""
         )
+        # Whole-member AI health analysis (JSON), cached with a hash of the data
+        # it was generated from so the UI can flag it as stale when results change.
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS member_analyses (
+                member_id INTEGER PRIMARY KEY,
+                analysis TEXT NOT NULL,
+                results_hash TEXT,
+                generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE
+            )"""
+        )
         # Migration: add columns that older databases predate.
         mcols = {r["name"] for r in conn.execute("PRAGMA table_info(members)")}
         if "private" not in mcols:
