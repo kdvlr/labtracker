@@ -64,9 +64,11 @@ def _require_member(conn, request: Request, member_id: Optional[int]):
 
 def _require_unlocked(conn, request: Request):
     """Guard for actions that manage privacy itself. Without this, anyone could
-    simply clear the PIN and the whole scheme would be decorative. Bootstrap
-    case: when no PIN exists yet, the first person may set one."""
-    if access.get_pin_hash(conn) and not access.settings_session_valid(conn, _token(request)):
+    simply clear the PIN and the whole scheme would be decorative. Any valid
+    unlock session qualifies — the same PIN that reveals private profiles also
+    permits privacy/settings changes. Bootstrap case: when no PIN exists yet,
+    the first person may set one."""
+    if access.get_pin_hash(conn) and not access.session_valid(conn, _token(request)):
         raise HTTPException(403, "Enter the PIN to change privacy settings")
 
 

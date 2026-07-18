@@ -8,7 +8,8 @@ const state = {
   collapsed: {},
   statusFilter: null,
   access: { has_pin: false, unlocked: false },
-  settingsUnlockToken: null,
+  // NOTE: a single unlock session (in localStorage) gates both private profiles
+  // and settings — no separate settings scope.
 };
 
 state.pushCount = 0;
@@ -56,24 +57,12 @@ window.addEventListener("popstate", async (e) => {
     const currentPrivate = isViewPrivate(state.view, currentMemberId);
     const targetPrivate = isViewPrivate(targetState.view, targetState.activeMember);
 
-    const targetSettings = (targetState.view === "settings");
-    const isLocked = state.access.has_pin && (targetSettings ? !state.settingsUnlockToken : !state.access.unlocked);
-    if (isLocked) {
+    if (state.access.has_pin && !state.access.unlocked && targetPrivate) {
       openUnlockModal(
-        async () => {
-          Object.assign(state, targetState);
-          render();
-        },
-        () => {
-          history.back();
-        },
-        targetSettings ? "settings" : "member"
+        async () => { Object.assign(state, targetState); render(); },
+        () => { history.back(); }
       );
       return;
-    }
-
-    if (state.settingsUnlockToken && targetState.view !== "settings") {
-      lockSettings();
     }
 
     if (state.access.unlocked && currentPrivate && !targetPrivate) {
@@ -136,22 +125,11 @@ function navigateTo(view, extras = {}) {
   const targetMemberId = extras.activeMember !== undefined ? extras.activeMember : state.activeMember;
   const targetPrivate = isViewPrivate(view, targetMemberId);
 
-  const targetSettings = (view === "settings");
-  const isLocked = state.access.has_pin && (targetSettings ? !state.settingsUnlockToken : !state.access.unlocked);
-  if (isLocked) {
-    openUnlockModal(
-      async () => {
-        navigateTo(view, extras);
-      },
-      () => {
-      },
-      targetSettings ? "settings" : "member"
-    );
+  // Only prompt when the destination is actually gated (a private profile, or
+  // Settings). Public profiles must never ask for a PIN.
+  if (state.access.has_pin && !state.access.unlocked && targetPrivate) {
+    openUnlockModal(async () => { navigateTo(view, extras); }, () => {});
     return;
-  }
-
-  if (state.settingsUnlockToken && view !== "settings") {
-    lockSettings();
   }
 
   // If we are currently unlocked, and navigating away to a public view, automatically lock!
@@ -220,19 +198,9 @@ const getUnlockToken = () => { try { return localStorage.getItem(UNLOCK_KEY); } 
 const setUnlockToken = (t) => { try { t ? localStorage.setItem(UNLOCK_KEY, t) : localStorage.removeItem(UNLOCK_KEY); } catch {} };
 
 async function api(path, opts = {}) {
-  const method = (opts.method || "GET").toUpperCase();
-  const isSettingsPath = path.startsWith("/settings") || 
-                        (method !== "GET" && (
-                          (path.startsWith("/members") && 
-                           !path.includes("/analysis") && 
-                           !path.includes("/summary") && 
-                           !path.includes("/documents") && 
-                           !path.includes("/results")) ||
-                          (path.startsWith("/test-types") && 
-                           !path.includes("/describe")) ||
-                          path.startsWith("/access")
-                        ));
-  let tok = isSettingsPath ? state.settingsUnlockToken : getUnlockToken();
+  // One unlock token for everything — it both reveals private profiles and
+  // authorizes settings/privacy changes.
+  let tok = getUnlockToken();
   if (opts.token !== undefined) {
     tok = opts.token;
   }
@@ -950,7 +918,7 @@ const MEMBER_PALETTE = ["#2a78d6", "#1baf7a", "#eda100", "#e34948", "#4a3aa7", "
 // Nothing here is shown to a device that has never unlocked and has no reason
 // to: the lock affordance only appears once a PIN exists at all, and even then
 // it's a single quiet icon, not a login wall.
-function openUnlockModal(onSuccess = null, onCancel = null, scope = "member") {
+function openUnlockModal(onSuccess = null, onCancel = null) {
   const pin = el("input", {
     type: "password", inputmode: "numeric", pattern: "[0-9]*", maxlength: "8",
     placeholder: "PIN", autocomplete: "off",
@@ -960,12 +928,8 @@ function openUnlockModal(onSuccess = null, onCancel = null, scope = "member") {
     const v = pin.value.trim();
     if (!v) return;
     try {
-      const res = await api("/unlock", { method: "POST", body: { pin: v, scope: scope } });
-      if (scope === "settings") {
-        state.settingsUnlockToken = res.token;
-      } else {
-        setUnlockToken(res.token);
-      }
+      const res = await api("/unlock", { method: "POST", body: { pin: v } });
+      setUnlockToken(res.token);
       closeModal();
       await loadCore();
       if (onSuccess) {
@@ -981,13 +945,9 @@ function openUnlockModal(onSuccess = null, onCancel = null, scope = "member") {
     }
   };
   pin.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
-  
-  const leadMsg = scope === "settings"
-    ? "Enter the PIN to manage settings on this device."
-    : "Enter the PIN to see private profiles on this device.";
 
   openModal("Enter PIN", [
-    el("p", { class: "modal-lead" }, leadMsg),
+    el("p", { class: "modal-lead" }, "Enter the PIN to unlock private profiles and settings on this device."),
     el("div", { class: "field" }, pin),
     err,
   ], [
@@ -1004,13 +964,6 @@ async function lockDevice() {
   if (state.view !== "household" && state.view !== "settings") navigateTo("household");
   else render();
   toast("Locked");
-}
-
-function lockSettings() {
-  if (state.settingsUnlockToken) {
-    api("/lock", { method: "POST", token: state.settingsUnlockToken }).catch(() => {});
-    state.settingsUnlockToken = null;
-  }
 }
 
 function openEditMember(member) {
@@ -3091,7 +3044,7 @@ async function renderPrivacyCard() {
     return card;
   }
 
-  if (!state.settingsUnlockToken && !state.access.unlocked) {
+  if (!state.access.unlocked) {
     card.append(
       el("p", { class: "modal-lead" }, "Enter the PIN to change privacy settings on this device."),
       el("button", { class: "btn btn-primary", onclick: () => openUnlockModal() }, "Enter PIN"),
