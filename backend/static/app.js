@@ -566,11 +566,11 @@ function askDuplicateDecision(duplicates) {
       el("button", {
         class: "btn btn-quiet",
         onclick: () => { closeModal(); resolve("duplicate"); }
-      }, "Save a second copy"),
+      }, "Keep both"),
       el("button", {
         class: "btn btn-primary",
         onclick: () => { closeModal(); resolve("ignore"); }
-      }, `Skip ${d.length > 1 ? "duplicates" : "duplicate"} and save the rest`),
+      }, `Skip ${d.length > 1 ? "duplicates" : "duplicate"}`),
     ];
 
     openModal("Some results are already saved", [bodyText], actions);

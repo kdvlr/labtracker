@@ -440,7 +440,7 @@ textarea { resize: vertical; }
 .modal { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); width: 100%; max-width: 500px; padding: 32px; max-height: 90vh; overflow-y: auto; animation: pop 0.25s cubic-bezier(0.2, 0.8, 0.2, 1); }
 @keyframes pop { from { opacity: 0; transform: translateY(12px) scale(0.96); } }
 .modal h3 { font-family: var(--sans-display); margin: 0 0 20px; font-size: 22px; font-weight: 600; letter-spacing: -0.02em; color: var(--accent); }
-.modal-actions { display: flex; gap: 12px; justify-content: flex-end; margin-top: 24px; }
+.modal-actions { display: flex; flex-wrap: wrap; gap: 12px; justify-content: flex-end; margin-top: 24px; }
 
 /* ---------- extract review ---------- */
 .review-row { display: grid; grid-template-columns: 44px 1.5fr 0.8fr 0.9fr 0.55fr; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border); }
@@ -593,10 +593,6 @@ textarea { resize: vertical; }
      visible rather than hiding some behind a horizontal scroll. */
   .tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
   .tab { min-width: 0; }
-
-  .modal { max-width: none; border-radius: var(--radius) var(--radius) 0 0; }
-  .modal-actions { flex-direction: column-reverse; }
-  .modal-actions .btn { width: 100%; justify-content: center; }
   table { font-size: 15px; }
   th, td { padding: 12px 10px; }
 
@@ -1128,6 +1124,13 @@ textarea { resize: vertical; }
   border-radius: var(--radius-sm);
   padding: 16px;
   margin-bottom: 18px;
+}
+
+@media (max-width: 576px) {
+  .modal-backdrop { align-items: flex-end; padding: 0; }
+  .modal { max-width: none; border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+  .modal-actions { flex-direction: column-reverse; }
+  .modal-actions .btn { width: 100%; justify-content: center; }
 }
 
 
