@@ -2163,242 +2163,155 @@ async function deleteImport(doc) {
   await loadCore(); render();
 }
 
-// Helper to group documents by patient name
-function getGroupKey(d) {
-  return d.member_name || "Unassigned";
-}
-
 function renderDocList(container, docs) {
-  container.innerHTML = "";
-  
-  // Filter docs globally by search and patient selection
-  let filtered = docs.filter(d => {
-    // 1. Search filter
-    if (state.docFilter.search) {
-      const q = state.docFilter.search.toLowerCase();
-      const filenameMatch = (d.filename || "").toLowerCase().includes(q);
-      const labMatch = (d.lab_name || "").toLowerCase().includes(q);
-      if (!filenameMatch && !labMatch) {
-        return false;
-      }
-    }
-    // 2. Patient filter
-    if (state.docFilter.patient) {
-      if (state.docFilter.patient === "unassigned") {
-        if (d.member_id !== null && d.member_name) return false;
-      } else {
-        if (d.member_id !== Number(state.docFilter.patient)) return false;
-      }
-    }
-    return true;
-  });
-  
-  if (!filtered.length) {
-    container.append(el("div", { class: "empty" }, "No documents match the active filters."));
-    return;
-  }
-  
-  // Group by patient
-  const groups = {};
-  filtered.forEach(d => {
-    const key = getGroupKey(d);
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(d);
-  });
-  
-  // Order groups alphabetically, but put "Unassigned" at the bottom
-  const groupNames = Object.keys(groups).sort((a, b) => {
-    if (a === "Unassigned") return 1;
-    if (b === "Unassigned") return -1;
-    return a.localeCompare(b);
-  });
-  
-  state.docFilter.memberStatus = state.docFilter.memberStatus || {};
-  
-  for (const groupName of groupNames) {
-    const groupDocsAll = groups[groupName];
-    
-    // Status tallies (tabs) for this specific group
-    const allCount = groupDocsAll.length;
-    const needsReviewCount = groupDocsAll.filter(d => d.status === "needs_review" || d.status === "partially_imported").length;
-    const fullyCount = groupDocsAll.filter(d => d.status === "fully_imported").length;
-    const partiallyCount = groupDocsAll.filter(d => d.status === "partially_imported").length;
-    const failedCount = groupDocsAll.filter(d => d.status === "failed").length;
-    
-    const activeStatus = state.docFilter.memberStatus[groupName] || null;
-    
-    // Filter docs in this group locally by active group status
-    const groupDocsFiltered = groupDocsAll.filter(d => {
-      if (!activeStatus) return true;
-      if (activeStatus === "needs_review") {
-        return d.status === "needs_review" || d.status === "partially_imported";
-      }
-      return d.status === activeStatus;
-    });
-    
-    // Sort documents descending by date within the group
-    groupDocsFiltered.sort((a, b) => {
-      const dateA = a.report_date || a.created_at || "";
-      const dateB = b.report_date || b.created_at || "";
-      return dateB.localeCompare(dateA);
-    });
-    
-    // Slice to current pagination limit
-    const toShow = groupDocsFiltered.slice(0, state.docFilter.limit);
-    
-    const table = el("table");
-    table.append(el("thead", {}, el("tr", {}, [
-      el("th", {}, "File Name"),
-      el("th", {}, "Date : Lab"),
-      el("th", {}, "Results"),
-      el("th", {}, "Status"),
-      el("th", { style: "width: 1%; text-align: right;" }, "")
-    ])));
-    
-    const tbody = el("tbody");
-    toShow.forEach(d => {
-      const needsReview = d.status === "needs_review" || d.status === "partially_imported";
-      const statusTextMap = {
-        "needs_review": "Needs Review",
-        "fully_imported": "Fully Imported",
-        "partially_imported": "Partially Imported",
-        "failed": "Failed"
-      };
-      const statusPillClass = {
-        "needs_review": "pill-L",
-        "fully_imported": "pill-ok",
-        "partially_imported": "pill-L",
-        "failed": "pill-H"
-      }[d.status] || "pill-L";
-      
-      const actions = el("div", { style: "display:flex; gap:6px; justify-content:flex-end; align-items:center; flex-wrap:nowrap;" }, [
-        needsReview ? el("button", { class: "btn btn-sm btn-primary", onclick: () => openReview(d) }, "Review →") : null,
-        state.members.length > 1 ? el("button", { class: "btn btn-sm", onclick: () => openReassignDoc(d) }, "Reassign") : null,
-        el("a", { class: "btn btn-sm", href: `/api/documents/${d.id}/file`, target: "_blank" }, "Open File"),
-        el("button", { class: "btn btn-sm btn-danger", onclick: () => deleteImport(d) }, "Delete")
-      ].filter(Boolean));
-      
-      tbody.append(el("tr", {}, [
-        el("td", { style: "font-weight: 600;" }, d.filename),
-        el("td", {}, `${fmtDate(d.report_date || d.created_at)} : ${d.lab_name || "Unknown Lab"}`),
-        el("td", {}, `${d.result_count || 0} items`),
-        el("td", {}, el("span", { class: "pill " + statusPillClass }, statusTextMap[d.status] || d.status)),
-        el("td", { style: "width: 1%; white-space: nowrap; text-align: right;" }, actions)
-      ]));
-    });
-    table.append(tbody);
-    
-    const tallies = el("div", { class: "status-tallies", style: "margin-bottom: 12px; gap: 8px; justify-content: flex-start; flex-wrap: wrap;" }, [
-      el("button", {
-        class: "status-tally-btn" + (activeStatus === null ? " active" : ""),
-        style: "font-size: 13px; padding: 4px 10px;",
-        onclick: () => { state.docFilter.memberStatus[groupName] = null; renderDocList(container, docs); }
-      }, ["All", el("span", { class: "status-tally-count" }, String(allCount))]),
-      el("button", {
-        class: "status-tally-btn" + (activeStatus === "needs_review" ? " active" : ""),
-        style: "font-size: 13px; padding: 4px 10px;",
-        onclick: () => { state.docFilter.memberStatus[groupName] = "needs_review"; renderDocList(container, docs); }
-      }, ["Needs Review", el("span", { class: "status-tally-count" }, String(needsReviewCount))]),
-      el("button", {
-        class: "status-tally-btn" + (activeStatus === "fully_imported" ? " active" : ""),
-        style: "font-size: 13px; padding: 4px 10px;",
-        onclick: () => { state.docFilter.memberStatus[groupName] = "fully_imported"; renderDocList(container, docs); }
-      }, ["Fully Imported", el("span", { class: "status-tally-count" }, String(fullyCount))]),
-      el("button", {
-        class: "status-tally-btn" + (activeStatus === "partially_imported" ? " active" : ""),
-        style: "font-size: 13px; padding: 4px 10px;",
-        onclick: () => { state.docFilter.memberStatus[groupName] = "partially_imported"; renderDocList(container, docs); }
-      }, ["Partially Imported", el("span", { class: "status-tally-count" }, String(partiallyCount))]),
-      el("button", {
-        class: "status-tally-btn" + (activeStatus === "failed" ? " active" : ""),
-        style: "font-size: 13px; padding: 4px 10px;",
-        onclick: () => { state.docFilter.memberStatus[groupName] = "failed"; renderDocList(container, docs); }
-      }, ["Failed", el("span", { class: "status-tally-count" }, String(failedCount))])
-    ]);
-    
-    const groupSection = el("div", { style: "margin-bottom: 32px;" }, [
-      el("h3", { style: "margin-top: 24px; margin-bottom: 8px; font-family: var(--sans-display);" }, groupName),
-      tallies,
-      el("div", { class: "card", style: "padding: 0; overflow-x: auto; margin-bottom: 12px;" }, table)
-    ]);
-    
-    // Show Load More button if there are more filtered items for this group
-    if (groupDocsFiltered.length > toShow.length) {
-      groupSection.append(el("div", { style: "display: flex; justify-content: center; margin-top: 12px;" }, 
-        el("button", { 
-          class: "btn btn-primary btn-sm", 
-          onclick: () => {
-            state.docFilter.limit += 15;
-            renderDocList(container, docs);
-          }
-        }, "Load More")
-      ));
-    }
-    
-    container.append(groupSection);
-  }
+  // Deprecated by new timeline system. Removed to keep codebase clean.
 }
 
-// ---------------- documents ----------------
 async function renderDocuments(main) {
   main.innerHTML = "";
   document.querySelectorAll('[data-view="documents"]').forEach((b) => b.classList.add("active"));
+  
+  if (!state.docFilter || state.docFilter.patient !== undefined) {
+    // Overwrite legacy filter schema with new global filter model
+    state.docFilter = {
+      search: "",
+      memberId: "",      // "" = Everyone, "unassigned", or member ID (string)
+      statusGroup: "all", // "all", "needs_attention", "done"
+      limit: 15,
+      offset: 0
+    };
+  }
+
   main.append(el("div", { class: "page-head" }, el("div", {}, [
     el("h1", { class: "page-title" }, "Documents"),
     el("p", { class: "page-sub" }, "Every uploaded report is kept locally as a backup you can reopen anytime."),
   ])));
-  
-  if (!state.docFilter) {
-    state.docFilter = {
-      search: "",
-      patient: "",
-      status: null,
-      limit: 15,
-      memberStatus: {}
-    };
-  }
 
-  const docs = await api("/documents");
-  if (!docs.length) { main.append(el("div", { class: "empty" }, "No documents uploaded yet.")); return; }
+  // 1. Pinned Needs Attention Strip
+  const attentionContainer = el("div");
+  main.append(attentionContainer);
   
-  const unassignedCount = docs.filter(d => !d.member_name).length;
-  if (state.docFilter.patient === "unassigned" && unassignedCount === 0) {
-    state.docFilter.patient = "";
-  }
+  const loadAttentionStrip = async () => {
+    try {
+      const attentionDocs = await api("/documents?status_group=needs_attention");
+      if (attentionDocs.length > 0) {
+        const expandBtn = el("button", { 
+          class: "btn btn-sm ghost-btn", 
+          style: "margin: 0; padding: 2px 8px; font-size: 11px;" 
+        });
+        let expanded = false;
+        const cardsContainer = el("div", { class: "attention-cards-container" });
+        
+        const renderAttentionCards = () => {
+          cardsContainer.innerHTML = "";
+          const visibleDocs = expanded ? attentionDocs : attentionDocs.slice(0, 5);
+          visibleDocs.forEach(d => {
+            const initialsStr = d.member_name ? d.member_name.trim().slice(0, 1).toUpperCase() : "?";
+            const colorStr = d.member_name ? (state.members.find(m => m.id === d.member_id)?.color || "#2f6fe0") : "#a0a0a0";
+            const statusTextMap = {
+              "needs_review": "Needs review",
+              "partially_imported": "Partially imported",
+              "failed": "Failed extraction"
+            };
+            const pillClass = d.status === "failed" ? "pill-red" : "pill-amber";
+            const buttonText = d.status === "failed" ? "Retry" : "Review →";
+            
+            const card = el("div", { class: "attention-card", onclick: () => openReview(d) }, [
+              el("div", { class: "attention-card-title" }, d.filename),
+              el("div", { class: "attention-card-meta" }, `${d.lab_name || "Unknown Lab"} · ${fmtDate(d.report_date || d.created_at)}`),
+              el("div", { class: "attention-card-footer" }, [
+                el("div", { style: "display: flex; align-items: center; gap: 6px;" }, [
+                  el("span", { class: "avatar", style: `background:${colorStr}; width: 18px; height: 18px; font-size: 9px; line-height: 18px;` }, initialsStr),
+                  el("span", { style: "font-size: 12px; font-weight: 500;" }, d.member_name || "Unassigned")
+                ]),
+                el("button", { 
+                  class: "btn btn-sm btn-primary", 
+                  style: "margin: 0; padding: 2px 8px; font-size: 11px;",
+                  onclick: (e) => { e.stopPropagation(); openReview(d); }
+                }, buttonText),
+                el("span", { class: "pill " + pillClass, style: "font-size: 11px; padding: 2px 8px; margin-left: 8px;" }, statusTextMap[d.status] || d.status)
+              ])
+            ]);
+            cardsContainer.append(card);
+          });
+          
+          if (attentionDocs.length > 5) {
+            expandBtn.textContent = expanded ? "Show less" : `+${attentionDocs.length - 5} more`;
+          }
+        };
+        
+        expandBtn.onclick = (e) => {
+          e.stopPropagation();
+          expanded = !expanded;
+          renderAttentionCards();
+        };
+        
+        renderAttentionCards();
+        
+        attentionContainer.innerHTML = "";
+        attentionContainer.append(el("div", { class: "needs-attention-strip" }, [
+          el("div", { class: "needs-attention-title", style: "display: flex; justify-content: space-between; align-items: center;" }, [
+            el("span", {}, "⚠️ Needs Attention"),
+            attentionDocs.length > 5 ? expandBtn : null
+          ].filter(Boolean)),
+          cardsContainer
+        ]));
+      }
+    } catch (e) {
+      console.error("Failed to load attention strip", e);
+    }
+  };
   
-  // Scoped Member Pills (chips) at the top
-  const memberPills = el("div", { class: "status-tallies", style: "margin-bottom: 16px; flex-wrap: wrap; gap: 8px;" }, [
-    el("button", {
-      class: "status-tally-btn" + (state.docFilter.patient === "" ? " active" : ""),
-      onclick: () => { state.docFilter.patient = ""; state.docFilter.limit = 15; renderDocuments(main); }
-    }, [
-      "All Patients",
-      el("span", { class: "status-tally-count" }, String(docs.length))
-    ])
-  ]);
+  loadAttentionStrip();
+
+  // 2. Fetch overall document metadata once to calculate chip counts
+  const allDocs = await api("/documents");
   
+  // Patient Selector chips
+  const patientPills = el("div", { class: "status-tallies", style: "margin-bottom: 12px; flex-wrap: wrap; gap: 8px;" });
+  
+  patientPills.append(el("button", {
+    class: "status-tally-btn" + (state.docFilter.memberId === "" ? " active" : ""),
+    onclick: () => { state.docFilter.memberId = ""; state.docFilter.offset = 0; refreshTimeline(); }
+  }, ["Everyone", el("span", { class: "status-tally-count" }, String(allDocs.length))]));
+  
+  const unassignedCount = allDocs.filter(d => !d.member_name).length;
   if (unassignedCount > 0) {
-    memberPills.append(el("button", {
-      class: "status-tally-btn" + (state.docFilter.patient === "unassigned" ? " active" : ""),
-      onclick: () => { state.docFilter.patient = "unassigned"; state.docFilter.limit = 15; renderDocuments(main); }
-    }, [
-      "Unassigned",
-      el("span", { class: "status-tally-count" }, String(unassignedCount))
-    ]));
+    patientPills.append(el("button", {
+      class: "status-tally-btn" + (state.docFilter.memberId === "unassigned" ? " active" : ""),
+      onclick: () => { state.docFilter.memberId = "unassigned"; state.docFilter.offset = 0; refreshTimeline(); }
+    }, ["Unassigned", el("span", { class: "status-tally-count" }, String(unassignedCount))]));
   }
   
   state.members.forEach(m => {
-    const count = docs.filter(d => d.member_id === m.id).length;
-    memberPills.append(el("button", {
-      class: "status-tally-btn" + (state.docFilter.patient === String(m.id) ? " active" : ""),
-      onclick: () => { state.docFilter.patient = String(m.id); state.docFilter.limit = 15; renderDocuments(main); }
-    }, [
-      m.name,
-      el("span", { class: "status-tally-count" }, String(count))
-    ]));
+    const count = allDocs.filter(d => d.member_id === m.id).length;
+    patientPills.append(el("button", {
+      class: "status-tally-btn" + (state.docFilter.memberId === String(m.id) ? " active" : ""),
+      onclick: () => { state.docFilter.memberId = String(m.id); state.docFilter.offset = 0; refreshTimeline(); }
+    }, [m.name, el("span", { class: "status-tally-count" }, String(count))]));
   });
 
-  // Search input
+  // Status Selector chips
+  const statusPills = el("div", { class: "status-tallies", style: "margin-bottom: 16px; flex-wrap: wrap; gap: 8px;" });
+  
+  statusPills.append(el("button", {
+    class: "status-tally-btn" + (state.docFilter.statusGroup === "all" ? " active" : ""),
+    onclick: () => { state.docFilter.statusGroup = "all"; state.docFilter.offset = 0; refreshTimeline(); }
+  }, ["All", el("span", { class: "status-tally-count" }, String(allDocs.length))]));
+  
+  const needsCount = allDocs.filter(d => ["needs_review", "partially_imported", "failed"].includes(d.status)).length;
+  statusPills.append(el("button", {
+    class: "status-tally-btn" + (state.docFilter.statusGroup === "needs_attention" ? " active" : ""),
+    onclick: () => { state.docFilter.statusGroup = "needs_attention"; state.docFilter.offset = 0; refreshTimeline(); }
+  }, ["Needs Attention", el("span", { class: "status-tally-count" }, String(needsCount))]));
+  
+  const doneCount = allDocs.filter(d => ["fully_imported", "reviewed"].includes(d.status)).length;
+  statusPills.append(el("button", {
+    class: "status-tally-btn" + (state.docFilter.statusGroup === "done" ? " active" : ""),
+    onclick: () => { state.docFilter.statusGroup = "done"; state.docFilter.offset = 0; refreshTimeline(); }
+  }, ["Done", el("span", { class: "status-tally-count" }, String(doneCount))]));
+
+  // Search Box
   const searchInput = el("input", {
     type: "search",
     placeholder: "Search by file name or lab...",
@@ -2407,21 +2320,228 @@ async function renderDocuments(main) {
     value: state.docFilter.search,
     oninput: (e) => {
       state.docFilter.search = e.target.value;
-      state.docFilter.limit = 15;
-      renderDocList(listContainer, docs);
+      state.docFilter.offset = 0;
+      refreshTimeline();
     }
   });
-  
+
   const filterRow = el("div", { 
-    style: "display: flex; gap: 12px; margin-bottom: 20px; align-items: center;" 
+    style: "display: flex; flex-direction: column; gap: 12px; margin-bottom: 24px;" 
   }, [
-    el("div", { class: "doc-search-box", style: "flex: 1; margin: 0;" }, searchInput)
+    el("div", { style: "display: flex; gap: 12px; align-items: center;" }, [
+      el("div", { class: "doc-search-box", style: "flex: 1; margin: 0;" }, searchInput)
+    ]),
+    patientPills,
+    statusPills
   ]);
+  main.append(filterRow);
+
+  // 3. Timeline Layout
+  const timelineContent = el("div", { class: "timeline-main-content" });
+  const yearRail = el("div", { class: "year-jump-rail" });
   
-  const listContainer = el("div", { class: "docs-list-container" });
-  
-  main.append(memberPills, filterRow, listContainer);
-  renderDocList(listContainer, docs);
+  const layoutContainer = el("div", { class: "timeline-layout-container" }, [
+    timelineContent,
+    yearRail
+  ]);
+  main.append(layoutContainer);
+
+  let loadedDocs = [];
+
+  const refreshTimeline = async () => {
+    timelineContent.innerHTML = "";
+    yearRail.innerHTML = "";
+    loadedDocs = [];
+    state.docFilter.offset = 0;
+    
+    patientPills.querySelectorAll(".status-tally-btn").forEach(btn => btn.classList.remove("active"));
+    const activePatientBtn = Array.from(patientPills.children).find(btn => {
+      const text = btn.textContent.toLowerCase();
+      if (state.docFilter.memberId === "") return text.includes("everyone");
+      if (state.docFilter.memberId === "unassigned") return text.includes("unassigned");
+      const member = state.members.find(m => m.id === Number(state.docFilter.memberId));
+      return member && text.includes(member.name.toLowerCase());
+    });
+    if (activePatientBtn) activePatientBtn.classList.add("active");
+    
+    statusPills.querySelectorAll(".status-tally-btn").forEach(btn => btn.classList.remove("active"));
+    const activeStatusBtn = Array.from(statusPills.children).find(btn => {
+      const text = btn.textContent.toLowerCase();
+      if (state.docFilter.statusGroup === "all") return text.includes("all");
+      if (state.docFilter.statusGroup === "needs_attention") return text.includes("needs attention");
+      if (state.docFilter.statusGroup === "done") return text.includes("done");
+    });
+    if (activeStatusBtn) activeStatusBtn.classList.add("active");
+    
+    await loadNextPage();
+  };
+
+  const loadNextPage = async () => {
+    const spinner = el("div", { class: "empty", style: "padding: 20px 0;" }, [el("span", { class: "spinner" }), " Loading history…"]);
+    timelineContent.append(spinner);
+    
+    try {
+      const params = new URLSearchParams({
+        limit: state.docFilter.limit,
+        offset: state.docFilter.offset,
+        search: state.docFilter.search,
+        status_group: state.docFilter.statusGroup
+      });
+      if (state.docFilter.memberId) {
+        params.append("member_id", state.docFilter.memberId);
+      }
+      
+      const newDocs = await api(`/documents?${params.toString()}`);
+      spinner.remove();
+      
+      if (newDocs.length === 0 && loadedDocs.length === 0) {
+        timelineContent.append(el("div", { class: "empty" }, "No documents match the active filters."));
+        return;
+      }
+      
+      const existingBtn = timelineContent.querySelector(".btn-load-more");
+      if (existingBtn) existingBtn.remove();
+      
+      loadedDocs.push(...newDocs);
+      renderTimelineList();
+      
+      if (newDocs.length === state.docFilter.limit) {
+        const loadMoreBtn = el("button", {
+          class: "btn btn-primary btn-sm btn-load-more",
+          style: "display: block; margin: 24px auto 0 auto;",
+          onclick: () => {
+            state.docFilter.offset += state.docFilter.limit;
+            loadNextPage();
+          }
+        }, "Load More");
+        timelineContent.append(loadMoreBtn);
+      }
+    } catch (e) {
+      spinner.remove();
+      timelineContent.append(el("div", { class: "warn" }, "Error loading documents: " + e.message));
+    }
+  };
+
+  const renderTimelineList = () => {
+    timelineContent.innerHTML = "";
+    yearRail.innerHTML = "";
+    
+    const monthGroups = {};
+    const yearsSet = new Set();
+    
+    loadedDocs.forEach(d => {
+      const dateStr = d.report_date || d.created_at || "";
+      let monthLabel = "Unknown Month";
+      let yearLabel = "Unknown Year";
+      
+      if (dateStr) {
+        try {
+          const dateObj = new Date(dateStr);
+          if (!isNaN(dateObj.getTime())) {
+            monthLabel = dateObj.toLocaleString("default", { month: "long", year: "numeric" });
+            yearLabel = String(dateObj.getFullYear());
+            yearsSet.add(yearLabel);
+          }
+        } catch (e) {}
+      }
+      
+      if (!monthGroups[monthLabel]) {
+        monthGroups[monthLabel] = {
+          label: monthLabel,
+          year: yearLabel,
+          docs: []
+        };
+      }
+      monthGroups[monthLabel].docs.push(d);
+    });
+    
+    const monthKeys = Object.keys(monthGroups).sort((a, b) => {
+      if (a.includes("Unknown")) return 1;
+      if (b.includes("Unknown")) return -1;
+      const dateA = new Date(a);
+      const dateB = new Date(b);
+      return dateB.getTime() - dateA.getTime();
+    });
+    
+    monthKeys.forEach(monthKey => {
+      const group = monthGroups[monthKey];
+      const monthId = `month-${group.label.replace(/\s+/g, "-")}`;
+      
+      timelineContent.append(el("div", { class: "timeline-month-header", id: monthId }, group.label));
+      
+      const cardsDiv = el("div", { class: "doc-timeline-cards" });
+      group.docs.forEach(d => {
+        const initialsStr = d.member_name ? d.member_name.trim().slice(0, 1).toUpperCase() : "?";
+        const colorStr = d.member_name ? (state.members.find(m => m.id === d.member_id)?.color || "#2f6fe0") : "#a0a0a0";
+        
+        const statusTextMap = {
+          "needs_review": "Needs review",
+          "fully_imported": "Done",
+          "partially_imported": "Needs review",
+          "reviewed": "Reviewed",
+          "failed": "Failed"
+        };
+        const pillClass = {
+          "needs_review": "pill-amber",
+          "partially_imported": "pill-amber",
+          "failed": "pill-red",
+          "fully_imported": "pill-green",
+          "reviewed": "pill-grey"
+        }[d.status] || "pill-amber";
+        
+        const card = el("div", { class: "doc-timeline-card", onclick: () => openReview(d) }, [
+          el("div", { class: "doc-card-info" }, [
+            el("div", { class: "doc-card-title" }, d.filename),
+            el("div", { class: "doc-card-meta" }, [
+              el("div", { class: "doc-card-meta-item" }, [
+                el("span", { class: "avatar", style: `background:${colorStr}; width: 18px; height: 18px; font-size: 9px; line-height: 18px;` }, initialsStr),
+                el("span", { style: "font-weight: 500;" }, d.member_name || "Unassigned")
+              ]),
+              el("div", { class: "doc-card-meta-item" }, [
+                el("span", {}, "🧪"),
+                el("span", {}, d.lab_name || "Unknown Lab")
+              ]),
+              el("div", { class: "doc-card-meta-item" }, [
+                el("span", {}, "📅"),
+                el("span", {}, fmtDate(d.report_date || d.created_at))
+              ])
+            ])
+          ]),
+          el("div", { class: "doc-card-actions" }, [
+            el("span", { class: "doc-card-count" }, `${d.result_count || 0} results`),
+            el("span", { class: "pill " + pillClass }, statusTextMap[d.status] || d.status)
+          ])
+        ]);
+        
+        cardsDiv.append(card);
+      });
+      timelineContent.append(cardsDiv);
+    });
+    
+    const sortedYears = Array.from(yearsSet).sort((a, b) => b.localeCompare(a));
+    if (sortedYears.length > 1) {
+      sortedYears.forEach(year => {
+        const matchingMonthKey = monthKeys.find(k => monthGroups[k].year === year);
+        if (matchingMonthKey) {
+          const monthId = `month-${matchingMonthKey.replace(/\s+/g, "-")}`;
+          const yearBtn = el("button", {
+            class: "year-jump-btn",
+            onclick: () => {
+              const targetHeader = document.getElementById(monthId);
+              if (targetHeader) {
+                targetHeader.scrollIntoView({ behavior: "smooth", block: "start" });
+                yearRail.querySelectorAll(".year-jump-btn").forEach(btn => btn.classList.remove("active"));
+                yearBtn.classList.add("active");
+              }
+            }
+          }, year);
+          yearRail.append(yearBtn);
+        }
+      });
+    }
+  };
+
+  refreshTimeline();
 }
 
 // Resume a document that was uploaded/extracted but never committed. Uses the
@@ -2440,11 +2560,60 @@ async function renderReviewDoc(main) {
     el("p", { class: "page-sub" }, doc.filename),
   ])));
 
-  // Member selector — defaults to the document's member, editable if unassigned.
-  const memberSel = el("select");
-  for (const m of state.members) memberSel.append(el("option", { value: m.id, ...(m.id === (doc.member_id || state.activeMember) ? { selected: "" } : {}) }, m.name));
-  main.append(el("div", { class: "card", style: "margin-bottom:18px;max-width:320px" },
-    el("div", { class: "field", style: "margin:0" }, [el("label", {}, "Family member"), memberSel])));
+  // Document Actions Panel
+  const memberSel = el("select", { style: "width:auto; margin: 0;" });
+  for (const m of state.members) {
+    memberSel.append(el("option", { value: m.id, ...(m.id === (doc.member_id || state.activeMember) ? { selected: "" } : {}) }, m.name));
+  }
+  
+  const reassignBtn = el("button", { 
+    class: "btn btn-sm btn-primary", 
+    style: "margin: 0;",
+    onclick: async () => {
+      const selectedId = Number(memberSel.value);
+      if (selectedId === doc.member_id) return;
+      const res = await api(`/documents/${doc.id}/reassign`, { method: "POST", body: { member_id: selectedId } });
+      const to = state.members.find(m => m.id === selectedId);
+      toast(`Moved ${res.moved} result${res.moved !== 1 ? "s" : ""} to ${to ? to.name : "member"}`);
+      await loadCore();
+      doc.member_id = selectedId;
+      doc.member_name = to ? to.name : "";
+    }
+  }, "Reassign");
+  
+  const openFileBtn = el("a", { 
+    class: "btn btn-sm", 
+    href: `/api/documents/${doc.id}/file`, 
+    target: "_blank",
+    style: "display: inline-flex; align-items: center; gap: 4px;"
+  }, [el("span", {}, "📄"), "Open Original File"]);
+  
+  const deleteBtn = el("button", { 
+    class: "btn btn-sm btn-danger", 
+    style: "display: inline-flex; align-items: center; gap: 4px; margin-left: auto;",
+    onclick: async () => {
+      const n = doc.result_count;
+      const msg = n
+        ? `Delete "${doc.filename}" and the ${n} result${n !== 1 ? "s" : ""} saved from it? This can't be undone.`
+        : `Delete "${doc.filename}"? This can't be undone.`;
+      if (!confirm(msg)) return;
+      const res = await api(`/documents/${doc.id}`, { method: "DELETE" });
+      toast(`Import deleted · ${res.deleted_results} result${res.deleted_results !== 1 ? "s" : ""} removed`);
+      await loadCore();
+      navigateTo("documents");
+    }
+  }, [el("span", {}, "🗑"), "Delete"]);
+  
+  const actionsPanel = el("div", { class: "document-actions-card" }, [
+    el("div", { style: "display: flex; align-items: center; gap: 8px; flex-wrap: wrap;" }, [
+      el("span", { style: "font-weight: 600; font-size: 13.5px; color: var(--text-secondary);" }, "Family member:"),
+      memberSel,
+      reassignBtn
+    ]),
+    openFileBtn,
+    deleteBtn
+  ]);
+  main.append(actionsPanel);
 
   const mount = el("div");
   const status = el("div", { style: "margin-bottom:14px" }, [el("span", { class: "spinner" }), " Loading extracted results…"]);
@@ -2647,10 +2816,112 @@ async function renderPrivacyCard() {
 }
 
 // ---------------- settings ----------------
+// Persistent categorization work queue: every test still sitting in "Other",
+// each assignable by hand from a dropdown or via an AI suggestion the user
+// accepts. Unlike the old modal, this stays on the page and shrinks as you
+// resolve rows, so there's an obvious place to "review these".
+function buildCategorizationQueue(categories, onChange) {
+  const wrap = el("div");
+  const pending = state.testTypes
+    .filter((t) => !t.category || t.category === "Other")
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  if (!pending.length) {
+    wrap.append(el("p", { class: "page-sub" }, "✓ Every test is assigned to a panel — nothing to review."));
+    return wrap;
+  }
+
+  wrap.append(el("p", { class: "page-sub", style: "margin-bottom:14px" },
+    `${pending.length} test${pending.length !== 1 ? "s" : ""} still in “Other”. Assign each to a panel, or let AI suggest — then accept.`));
+
+  const rows = [];
+  const tbody = el("tbody");
+
+  const removeRow = (r) => {
+    r.tr.remove();
+    rows.splice(rows.indexOf(r), 1);
+    if (!rows.length) wrap.querySelector(".cq-table")?.replaceWith(
+      el("p", { class: "page-sub" }, "✓ All done — every test is now assigned."));
+    onChange && onChange();
+  };
+
+  for (const t of pending) {
+    const sel = el("select", { style: "min-width:150px" });
+    for (const c of categories) sel.append(el("option", { value: c, ...(c === "Other" ? { selected: "" } : {}) }, c));
+
+    const saveBtn = el("button", { class: "btn btn-sm btn-primary", onclick: async () => {
+      if (sel.value === "Other") return toast("Pick a panel other than Other");
+      saveBtn.disabled = true;
+      try {
+        await api("/test-types/override-category", { method: "POST", body: { test_type_id: t.id, category: sel.value } });
+        const local = state.testTypes.find((x) => x.id === t.id); if (local) local.category = sel.value;
+        toast(`${t.name} → ${sel.value}`);
+        removeRow(r);
+      } catch (e) { toast("Failed: " + e.message); saveBtn.disabled = false; }
+    } }, "Save");
+
+    const suggestedTag = el("span", { class: "pill pill-muted", style: "display:none" });
+    const tr = el("tr", {}, [
+      el("td", {}, [el("div", { style: "font-weight:600" }, t.name), suggestedTag]),
+      el("td", {}, sel),
+      el("td", { style: "text-align:right" }, saveBtn),
+    ]);
+    tbody.append(tr);
+    const r = { t, sel, tr, suggestedTag };
+    rows.push(r);
+  }
+
+  const table = el("table", { class: "diff-table cq-table" }, [
+    el("thead", {}, el("tr", {}, [el("th", {}, "Test"), el("th", {}, "Panel"), el("th", {}, "")])),
+    tbody,
+  ]);
+
+  // AI suggest-all: fills each dropdown with a suggestion and flags it, so the
+  // human still confirms every row (per the "no silent reclassify" rule).
+  const suggestBtn = el("button", { class: "btn", style: "margin-bottom:14px", onclick: async () => {
+    suggestBtn.disabled = true; suggestBtn.textContent = "Asking AI…";
+    try {
+      const res = await api("/test-types/batch-categorize", { method: "POST", body: { test_names: rows.map((r) => r.t.name) } });
+      let n = 0;
+      for (const s of (res.suggestions || [])) {
+        const r = rows.find((x) => x.t.name === s.test_name);
+        if (r && categories.includes(s.category) && s.category !== "Other") {
+          r.sel.value = s.category;
+          r.suggestedTag.textContent = "AI suggests " + s.category;
+          r.suggestedTag.style.display = "";
+          r.tr.style.background = "var(--accent-soft)";
+          n++;
+        }
+      }
+      toast(n ? `AI suggested ${n} — review and Save each, or Accept all` : "AI had no suggestions");
+      if (n) acceptAllBtn.style.display = "";
+    } catch (e) { toast("AI categorization failed: " + e.message); }
+    suggestBtn.disabled = false; suggestBtn.textContent = "🤖 Suggest all with AI";
+  } }, "🤖 Suggest all with AI");
+
+  const acceptAllBtn = el("button", { class: "btn btn-primary", style: "margin:14px 0 0; display:none", onclick: async () => {
+    acceptAllBtn.disabled = true;
+    const toApply = rows.filter((r) => r.sel.value !== "Other");
+    for (const r of [...toApply]) {
+      try {
+        await api("/test-types/override-category", { method: "POST", body: { test_type_id: r.t.id, category: r.sel.value } });
+        const local = state.testTypes.find((x) => x.id === r.t.id); if (local) local.category = r.sel.value;
+        removeRow(r);
+      } catch (e) { toast("Failed on " + r.t.name + ": " + e.message); }
+    }
+    toast(`Categorized ${toApply.length} test${toApply.length !== 1 ? "s" : ""}`);
+    acceptAllBtn.disabled = false;
+  } }, "Accept all suggestions");
+
+  wrap.append(suggestBtn, table, acceptAllBtn);
+  return wrap;
+}
+
 async function renderSettings(main) {
   main.innerHTML = "";
   document.querySelectorAll('[data-view="settings"]').forEach((b) => b.classList.add("active"));
   const s = await api("/settings");
+  const categories = (await api("/categories").catch(() => ({ categories: [] }))).categories || [];
   main.append(el("div", { class: "page-head" }, el("div", {}, [
     el("h1", { class: "page-title" }, "Settings"),
     el("p", { class: "page-sub" }, "Configure AI providers, system prompts, and privacy settings."),
@@ -2781,134 +3052,18 @@ async function renderSettings(main) {
     privacyContent.appendChild(privacyCard.firstChild);
   }
 
-  // 4. Advanced Actions Collapsible
-  const advancedContent = el("div");
-  const categorizeBtn = el("button", { 
-    class: "btn btn-primary",
-    onclick: () => {
-      const otherTests = state.testTypes.filter(t => t.category === "Other" || !t.category);
-      if (otherTests.length === 0) {
-        toast("All tests are already categorized!");
-        return;
-      }
-      
-      const modalBody = el("div", {}, [
-        el("span", { class: "spinner" }), 
-        el("span", { style: "margin-left: 8px;" }, `Analyzing ${otherTests.length} unmatched test${otherTests.length > 1 ? "s" : ""} with AI...`)
-      ]);
-      
-      const modalActions = [
-        el("button", { class: "btn", onclick: closeModal }, "Cancel")
-      ];
-      
-      const modal = openModal("Categorize Unmatched Tests", [modalBody], modalActions);
-      
-      api("/test-types/batch-categorize", {
-        method: "POST",
-        body: { test_names: otherTests.map(t => t.name) }
-      }).then(res => {
-        modalBody.innerHTML = "";
-        
-        if (!res.suggestions || res.suggestions.length === 0) {
-          modalBody.append(el("p", {}, "AI could not suggest any new categories."));
-          return;
-        }
-        
-        modalBody.append(el("p", { class: "page-sub" }, "Review and accept the AI-suggested categories for these tests:"));
-        
-        const tbody = el("tbody");
-        const suggestionRows = [];
-        
-        res.suggestions.forEach(s => {
-          const tt = otherTests.find(t => t.name === s.test_name);
-          if (!tt) return;
-          
-          const cb = el("input", { type: "checkbox", checked: "" });
-          tbody.append(el("tr", {}, [
-            el("td", {}, cb),
-            el("td", {}, s.test_name),
-            el("td", {}, "Other"),
-            el("td", { style: "font-weight: bold; color: var(--good);" }, s.category)
-          ]));
-          
-          suggestionRows.push({
-            checkbox: cb,
-            test_type_id: tt.id,
-            category: s.category,
-            test_name: s.test_name
-          });
-        });
-        
-        const table = el("table", { class: "diff-table" }, [
-          el("thead", {}, el("tr", {}, [
-            el("th", { style: "width: 40px;" }, ""),
-            el("th", {}, "Test Name"),
-            el("th", {}, "Current"),
-            el("th", {}, "Suggested")
-          ])),
-          tbody
-        ]);
-        
-        modalBody.append(table);
-        
-        // Add accept action button
-        const acceptBtn = el("button", { 
-          class: "btn btn-primary", 
-          onclick: async () => {
-            acceptBtn.disabled = true;
-            acceptBtn.textContent = "Saving...";
-            try {
-              let acceptedCount = 0;
-              for (const row of suggestionRows) {
-                if (row.checkbox.checked) {
-                  await api("/test-types/override-category", {
-                    method: "POST",
-                    body: {
-                      test_type_id: row.test_type_id,
-                      category: row.category
-                    }
-                  });
-                  acceptedCount++;
-                }
-              }
-              toast(`Successfully categorized ${acceptedCount} test type${acceptedCount !== 1 ? "s" : ""}`);
-              closeModal();
-              await loadCore();
-              renderSettings(main);
-            } catch (err) {
-              toast("Failed to update categories: " + err.message);
-              acceptBtn.disabled = false;
-              acceptBtn.textContent = "Accept Changes";
-            }
-          }
-        }, "Accept Changes");
-        
-        // Replace actions
-        const actionsContainer = modal.querySelector(".modal-actions");
-        actionsContainer.innerHTML = "";
-        actionsContainer.append(
-          el("button", { class: "btn", onclick: closeModal }, "Cancel"),
-          acceptBtn
-        );
-      }).catch(err => {
-        modalBody.innerHTML = "";
-        modalBody.append(el("div", { class: "warn" }, "AI categorization failed: " + err.message));
-      });
-    }
-  }, "Categorize Unmatched Tests");
+  // 4. Categorization Queue — the admin work queue for tests still in "Other".
+  const pendingCount = state.testTypes.filter((t) => !t.category || t.category === "Other").length;
+  const queueContent = buildCategorizationQueue(categories);
 
-  advancedContent.append(
-    el("p", { class: "page-sub", style: "margin-bottom: 12px;" }, "Review uncategorized markers (classified as 'Other') and batch re-classify them into appropriate panels using AI."),
-    categorizeBtn
-  );
-
-  // Wrap all sections in collapsible panels
+  // Wrap all sections in collapsible panels. The queue opens automatically and
+  // shows its backlog count in the header, so there's an obvious place to work.
   const aiSection = createCollapsible("AI Provider & Key Configuration", 1, aiConfigContent, true);
   const promptsSection = createCollapsible("AI System Prompts", 4, promptsContent, false);
   const privacySection = createCollapsible("Privacy & Security", state.access.has_pin ? "Protected" : "Public", privacyContent, false);
-  const advancedSection = createCollapsible("Advanced Actions", "AI Categorization", advancedContent, false);
+  const queueSection = createCollapsible("Categorization Queue", pendingCount === 0 ? "Clear" : pendingCount, queueContent, pendingCount > 0);
 
-  main.append(aiSection, promptsSection, privacySection, advancedSection);
+  main.append(aiSection, promptsSection, privacySection, queueSection);
 
   // PWA Add to Home Screen card
   if (window.deferredPrompt) {

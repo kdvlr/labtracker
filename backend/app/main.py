@@ -17,7 +17,7 @@ from . import access, ai
 from .config import FILES_DIR
 from .db import get_db, init_db, row_to_dict
 from .matching import match_test_type
-from .reference import age_at, categorize, resolve_range
+from .reference import CATEGORIES, age_at, categorize, resolve_range
 from .units import compute_flag, known_units, parse_value, to_canonical, to_number
 
 app = FastAPI(title="Rakta Charitra")
@@ -77,6 +77,45 @@ def _require_doc(conn, request: Request, doc_id: int):
     if not row:
         raise HTTPException(404, "Not found")
     _require_member(conn, request, row["member_id"])
+
+
+def recompute_doc_status(conn, doc_id: int) -> str:
+    """Derive a document's status from the outcome of its extracted rows.
+
+    Single source of truth so the commit path and the per-row import path can't
+    drift. Statuses, by how many rows landed where:
+      - some still need review + some imported  -> partially_imported
+      - some still need review, none imported    -> needs_review
+      - none need review, some imported          -> fully_imported
+      - none need review, none imported, but rows exist -> the user skipped
+        them all: that's 'reviewed', not 'failed'. 'failed' is reserved for a
+        document with no usable rows at all (extraction genuinely produced
+        nothing), so a red error state never appears for a deliberate choice.
+    """
+    counts = conn.execute(
+        """SELECT
+             COUNT(*) AS total,
+             SUM(status = 'needs_review') AS needs_review,
+             SUM(status = 'imported')     AS imported,
+             SUM(status = 'skipped')      AS skipped
+           FROM document_items WHERE document_id = ?""",
+        (doc_id,),
+    ).fetchone()
+    total = counts["total"] or 0
+    needs_review = counts["needs_review"] or 0
+    imported = counts["imported"] or 0
+    skipped = counts["skipped"] or 0
+
+    if needs_review > 0:
+        status = "partially_imported" if imported > 0 else "needs_review"
+    elif imported > 0:
+        status = "fully_imported"
+    elif skipped > 0:
+        status = "reviewed"          # nothing wrong — the user chose to skip
+    else:
+        status = "failed"            # no usable rows at all
+    conn.execute("UPDATE documents SET status = ? WHERE id = ?", (status, doc_id))
+    return status
 
 
 # ---------------- helpers ----------------
@@ -780,19 +819,67 @@ async def upload_document(
 
 
 @app.get("/api/documents")
-def list_documents(request: Request):
+def list_documents(
+    request: Request,
+    limit: Optional[int] = None,
+    offset: int = 0,
+    member_id: Optional[str] = None,
+    status_group: Optional[str] = None,
+    search: Optional[str] = None,
+):
     conn = get_db()
     try:
         vis = _visible(conn, request)
-        rows = conn.execute(
-            """SELECT d.*, m.name AS member_name,
-                      (SELECT COUNT(*) FROM results r WHERE r.document_id = d.id) AS result_count
-               FROM documents d LEFT JOIN members m ON m.id = d.member_id
-               ORDER BY d.created_at DESC"""
-        ).fetchall()
-        # An unattributed upload (member_id NULL) is mid-import so it stays
-        # visible; everything else inherits its member's visibility.
-        return [dict(r) for r in rows if r["member_id"] is None or r["member_id"] in vis]
+        vis_list = list(vis)
+        
+        # If vis_list is empty, we must ensure we handle it safely to avoid SQL syntax error
+        if not vis_list:
+            placeholders = "-1"
+            params = []
+        else:
+            placeholders = ",".join("?" for _ in vis_list)
+            params = list(vis_list)
+            
+        query = """
+            SELECT d.*, m.name AS member_name,
+                   (SELECT COUNT(*) FROM results r WHERE r.document_id = d.id) AS result_count
+            FROM documents d
+            LEFT JOIN members m ON m.id = d.member_id
+            WHERE (d.member_id IS NULL OR d.member_id IN ({}))
+        """.format(placeholders)
+        
+        if member_id:
+            if member_id == "unassigned":
+                query += " AND d.member_id IS NULL"
+            else:
+                try:
+                    query += " AND d.member_id = ?"
+                    params.append(int(member_id))
+                except ValueError:
+                    pass
+                    
+        if status_group:
+            if status_group == "needs_attention":
+                query += " AND d.status IN ('needs_review', 'partially_imported', 'failed')"
+            elif status_group == "done":
+                query += " AND d.status IN ('fully_imported', 'reviewed')"
+                
+        if search:
+            search_str = search.strip()
+            if search_str:
+                query += " AND (d.filename LIKE ? OR d.lab_name LIKE ?)"
+                params.append(f"%{search_str}%")
+                params.append(f"%{search_str}%")
+                
+        query += " ORDER BY COALESCE(d.report_date, d.created_at) DESC, d.id DESC"
+        
+        if limit is not None:
+            query += " LIMIT ? OFFSET ?"
+            params.append(limit)
+            params.append(offset)
+            
+        rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
     finally:
         conn.close()
 
@@ -1231,27 +1318,12 @@ def commit_results(req: CommitReq, request: Request):
                 (req.document_id,)
             )
             
-            # Recalculate document status
-            total_count = conn.execute("SELECT COUNT(*) FROM document_items WHERE document_id = ?", (req.document_id,)).fetchone()[0]
-            needs_review_count = conn.execute("SELECT COUNT(*) FROM document_items WHERE document_id = ? AND status = 'needs_review'", (req.document_id,)).fetchone()[0]
-            imported_count = conn.execute("SELECT COUNT(*) FROM document_items WHERE document_id = ? AND status = 'imported'", (req.document_id,)).fetchone()[0]
-            
-            if needs_review_count > 0:
-                if imported_count > 0:
-                    new_status = 'partially_imported'
-                else:
-                    new_status = 'needs_review'
-            else:
-                if imported_count > 0:
-                    new_status = 'fully_imported'
-                else:
-                    new_status = 'failed'
-                
             conn.execute(
-                "UPDATE documents SET status = ?, member_id = COALESCE(member_id, ?) WHERE id = ?",
-                (new_status, req.member_id, req.document_id)
+                "UPDATE documents SET member_id = COALESCE(member_id, ?) WHERE id = ?",
+                (req.member_id, req.document_id),
             )
-            
+            recompute_doc_status(conn, req.document_id)
+
         conn.commit()
         return {"created": created, "skipped": skipped, "duplicates": duplicates}
     finally:
@@ -1268,8 +1340,12 @@ class ItemImportReq(BaseModel):
 def import_document_item(doc_id: int, item_id: int, req: ItemImportReq, request: Request):
     conn = get_db()
     try:
+        # Guard both ends: the destination member AND the source document. Without
+        # the second check a locked device could touch a private member's
+        # extracted rows if it ever learned the id.
         _require_member(conn, request, req.member_id)
-        
+        _require_doc(conn, request, doc_id)
+
         # Verify document and item exist
         doc = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
         if not doc:
@@ -1341,27 +1417,12 @@ def import_document_item(doc_id: int, item_id: int, req: ItemImportReq, request:
             (result_id, req.item.test_type_id, item_id)
         )
         
-        # Recalculate document status
-        total_count = conn.execute("SELECT COUNT(*) FROM document_items WHERE document_id = ?", (doc_id,)).fetchone()[0]
-        needs_review_count = conn.execute("SELECT COUNT(*) FROM document_items WHERE document_id = ? AND status = 'needs_review'", (doc_id,)).fetchone()[0]
-        imported_count = conn.execute("SELECT COUNT(*) FROM document_items WHERE document_id = ? AND status = 'imported'", (doc_id,)).fetchone()[0]
-        
-        if needs_review_count > 0:
-            if imported_count > 0:
-                new_status = 'partially_imported'
-            else:
-                new_status = 'needs_review'
-        else:
-            if imported_count > 0:
-                new_status = 'fully_imported'
-            else:
-                new_status = 'failed'
-            
         conn.execute(
-            "UPDATE documents SET status = ?, member_id = COALESCE(member_id, ?) WHERE id = ?",
-            (new_status, req.member_id, doc_id)
+            "UPDATE documents SET member_id = COALESCE(member_id, ?) WHERE id = ?",
+            (req.member_id, doc_id),
         )
-        
+        new_status = recompute_doc_status(conn, doc_id)
+
         conn.commit()
         return {"ok": True, "result_id": result_id, "document_status": new_status}
     finally:
@@ -1704,6 +1765,13 @@ def override_test_type_category(req: CategoryOverrideReq, request: Request):
         return {"ok": True}
     finally:
         conn.close()
+
+
+@app.get("/api/categories")
+def list_categories():
+    """The canonical panel list, for the manual-categorization dropdown. Static
+    label names, no member data — safe to read without unlock."""
+    return {"categories": CATEGORIES}
 
 
 # ---------------- AI Q&A ----------------

@@ -90,10 +90,27 @@ def init_db() -> None:
                     ),
                 )
         conn.commit()
+
+        # Category/zone sync is authoritative and cheap — it re-applies whenever
+        # the reference definitions in code change, so it runs every startup.
         _migrate_categories_and_zones(conn)
-        _migrate_document_lifecycle(conn)
-        _migrate_clean_filenames(conn)
-        _migrate_document_status(conn)
+
+        # These are one-time data backfills over every document/result row. Gate
+        # them on a stored schema version so they stop full-scanning the table on
+        # every boot once they've run.
+        SCHEMA_VERSION = 1
+        cur = conn.execute("SELECT value FROM settings WHERE key = 'schema_version'").fetchone()
+        applied = int(cur["value"]) if cur and str(cur["value"]).isdigit() else 0
+        if applied < SCHEMA_VERSION:
+            _migrate_document_lifecycle(conn)
+            _migrate_clean_filenames(conn)
+            _migrate_document_status(conn)
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES ('schema_version', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (str(SCHEMA_VERSION),),
+            )
+            conn.commit()
     finally:
         conn.close()
 
