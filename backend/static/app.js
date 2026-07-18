@@ -8,6 +8,7 @@ const state = {
   collapsed: {},
   statusFilter: null,
   access: { has_pin: false, unlocked: false },
+  settingsUnlockToken: null,
 };
 
 state.pushCount = 0;
@@ -55,23 +56,28 @@ window.addEventListener("popstate", async (e) => {
     const currentPrivate = isViewPrivate(state.view, currentMemberId);
     const targetPrivate = isViewPrivate(targetState.view, targetState.activeMember);
 
-    // If target view is private and we are locked, prompt for PIN first!
-    if (state.access.has_pin && !state.access.unlocked && targetPrivate) {
+    const targetSettings = (targetState.view === "settings");
+    const isLocked = state.access.has_pin && (targetSettings ? !state.settingsUnlockToken : !state.access.unlocked);
+    if (isLocked) {
       openUnlockModal(
         async () => {
           Object.assign(state, targetState);
           render();
         },
         () => {
-          // Cancelled: go back to prevent seeing private view
           history.back();
-        }
+        },
+        targetSettings ? "settings" : "member"
       );
       return;
     }
 
+    if (state.settingsUnlockToken && targetState.view !== "settings") {
+      lockSettings();
+    }
+
     if (state.access.unlocked && currentPrivate && !targetPrivate) {
-      api("/lock", { method: "POST" }).catch(() => {});
+      api("/lock", { method: "POST", token: getUnlockToken() }).catch(() => {});
       setUnlockToken(null);
       state.access.unlocked = false;
       await loadCore();
@@ -130,24 +136,29 @@ function navigateTo(view, extras = {}) {
   const targetMemberId = extras.activeMember !== undefined ? extras.activeMember : state.activeMember;
   const targetPrivate = isViewPrivate(view, targetMemberId);
 
-  // If target view is private and we are locked, prompt for PIN first!
-  if (state.access.has_pin && !state.access.unlocked && targetPrivate) {
+  const targetSettings = (view === "settings");
+  const isLocked = state.access.has_pin && (targetSettings ? !state.settingsUnlockToken : !state.access.unlocked);
+  if (isLocked) {
     openUnlockModal(
       async () => {
         navigateTo(view, extras);
       },
       () => {
-        // Cancelled, do nothing
-      }
+      },
+      targetSettings ? "settings" : "member"
     );
     return;
+  }
+
+  if (state.settingsUnlockToken && view !== "settings") {
+    lockSettings();
   }
 
   // If we are currently unlocked, and navigating away to a public view, automatically lock!
   const currentMemberId = state.activeMember;
   const currentPrivate = isViewPrivate(state.view, currentMemberId);
   if (state.access.unlocked && currentPrivate && !targetPrivate) {
-    api("/lock", { method: "POST" }).catch(() => {});
+    api("/lock", { method: "POST", token: getUnlockToken() }).catch(() => {});
     setUnlockToken(null);
     state.access.unlocked = false;
     loadCore().then(() => {
@@ -209,7 +220,16 @@ const getUnlockToken = () => { try { return localStorage.getItem(UNLOCK_KEY); } 
 const setUnlockToken = (t) => { try { t ? localStorage.setItem(UNLOCK_KEY, t) : localStorage.removeItem(UNLOCK_KEY); } catch {} };
 
 async function api(path, opts = {}) {
-  const tok = getUnlockToken();
+  const isSettingsPath = path.startsWith("/settings") || 
+                        ((path.startsWith("/members") || path.startsWith("/test-types")) && 
+                         !path.includes("/summary") && 
+                         !path.includes("/analysis") && 
+                         !path.includes("/documents") && 
+                         !path.includes("/results"));
+  let tok = isSettingsPath ? state.settingsUnlockToken : getUnlockToken();
+  if (opts.token !== undefined) {
+    tok = opts.token;
+  }
   const res = await fetch("/api" + path, {
     headers: {
       ...(opts.body && !(opts.body instanceof FormData) ? { "Content-Type": "application/json" } : {}),
@@ -922,7 +942,7 @@ const MEMBER_PALETTE = ["#2a78d6", "#1baf7a", "#eda100", "#e34948", "#4a3aa7", "
 // Nothing here is shown to a device that has never unlocked and has no reason
 // to: the lock affordance only appears once a PIN exists at all, and even then
 // it's a single quiet icon, not a login wall.
-function openUnlockModal(onSuccess = null, onCancel = null) {
+function openUnlockModal(onSuccess = null, onCancel = null, scope = "member") {
   const pin = el("input", {
     type: "password", inputmode: "numeric", pattern: "[0-9]*", maxlength: "8",
     placeholder: "PIN", autocomplete: "off",
@@ -932,8 +952,12 @@ function openUnlockModal(onSuccess = null, onCancel = null) {
     const v = pin.value.trim();
     if (!v) return;
     try {
-      const res = await api("/unlock", { method: "POST", body: { pin: v } });
-      setUnlockToken(res.token);
+      const res = await api("/unlock", { method: "POST", body: { pin: v, scope: scope } });
+      if (scope === "settings") {
+        state.settingsUnlockToken = res.token;
+      } else {
+        setUnlockToken(res.token);
+      }
       closeModal();
       await loadCore();
       if (onSuccess) {
@@ -949,8 +973,13 @@ function openUnlockModal(onSuccess = null, onCancel = null) {
     }
   };
   pin.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+  
+  const leadMsg = scope === "settings"
+    ? "Enter the PIN to manage settings on this device."
+    : "Enter the PIN to see private profiles on this device.";
+
   openModal("Enter PIN", [
-    el("p", { class: "modal-lead" }, "Enter the PIN to see private profiles on this device."),
+    el("p", { class: "modal-lead" }, leadMsg),
     el("div", { class: "field" }, pin),
     err,
   ], [
@@ -961,12 +990,19 @@ function openUnlockModal(onSuccess = null, onCancel = null) {
 }
 
 async function lockDevice() {
-  await api("/lock", { method: "POST" }).catch(() => {});
+  await api("/lock", { method: "POST", token: getUnlockToken() }).catch(() => {});
   setUnlockToken(null);
   await loadCore();
   if (state.view !== "household" && state.view !== "settings") navigateTo("household");
   else render();
   toast("Locked");
+}
+
+function lockSettings() {
+  if (state.settingsUnlockToken) {
+    api("/lock", { method: "POST", token: state.settingsUnlockToken }).catch(() => {});
+    state.settingsUnlockToken = null;
+  }
 }
 
 function openEditMember(member) {

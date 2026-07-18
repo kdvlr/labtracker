@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 PIN_SETTING = "private_pin"
-SESSION_DAYS = 400          # a phone should stay unlocked essentially forever
+SESSION_DAYS = 90          # valid for 90 days for family members
 _ITERATIONS = 200_000
 
 # A short PIN is only safe if guessing is slow. Track failures per client and
@@ -85,15 +85,18 @@ def throttle_reset(client: str) -> None:
 
 # ---------------- sessions ----------------
 
-def create_session(conn) -> dict:
+def create_session(conn, scope: str = "member") -> dict:
     token = secrets.token_urlsafe(32)
-    expires = datetime.now(timezone.utc) + timedelta(days=SESSION_DAYS)
+    if scope == "settings":
+        expires = datetime.now(timezone.utc) + timedelta(minutes=5)
+    else:
+        expires = datetime.now(timezone.utc) + timedelta(days=SESSION_DAYS)
     conn.execute(
-        "INSERT INTO unlock_sessions (token, expires_at) VALUES (?, ?)",
-        (token, expires.isoformat()),
+        "INSERT INTO unlock_sessions (token, expires_at, scope) VALUES (?, ?, ?)",
+        (token, expires.isoformat(), scope),
     )
     conn.commit()
-    return {"token": token, "expires_at": expires.isoformat()}
+    return {"token": token, "expires_at": expires.isoformat(), "scope": scope}
 
 
 def session_valid(conn, token: Optional[str]) -> bool:
@@ -101,6 +104,22 @@ def session_valid(conn, token: Optional[str]) -> bool:
         return False
     row = conn.execute("SELECT expires_at FROM unlock_sessions WHERE token = ?", (token,)).fetchone()
     if not row:
+        return False
+    try:
+        if datetime.fromisoformat(row["expires_at"]) < datetime.now(timezone.utc):
+            conn.execute("DELETE FROM unlock_sessions WHERE token = ?", (token,))
+            conn.commit()
+            return False
+    except ValueError:
+        return False
+    return True
+
+
+def settings_session_valid(conn, token: Optional[str]) -> bool:
+    if not token:
+        return False
+    row = conn.execute("SELECT expires_at, scope FROM unlock_sessions WHERE token = ?", (token,)).fetchone()
+    if not row or row["scope"] != "settings":
         return False
     try:
         if datetime.fromisoformat(row["expires_at"]) < datetime.now(timezone.utc):

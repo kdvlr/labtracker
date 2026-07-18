@@ -66,7 +66,7 @@ def _require_unlocked(conn, request: Request):
     """Guard for actions that manage privacy itself. Without this, anyone could
     simply clear the PIN and the whole scheme would be decorative. Bootstrap
     case: when no PIN exists yet, the first person may set one."""
-    if access.get_pin_hash(conn) and not _unlocked(conn, request):
+    if access.get_pin_hash(conn) and not access.settings_session_valid(conn, _token(request)):
         raise HTTPException(403, "Enter the PIN to change privacy settings")
 
 
@@ -161,6 +161,7 @@ def _test_types(conn) -> list:
 
 class PinReq(BaseModel):
     pin: str
+    scope: Optional[str] = "member"
 
 
 class SetPinReq(BaseModel):
@@ -200,7 +201,7 @@ def unlock(req: PinReq, request: Request):
             access.throttle_fail(client)
             raise HTTPException(401, "Incorrect PIN")
         access.throttle_reset(client)
-        return access.create_session(conn)
+        return access.create_session(conn, scope=req.scope or "member")
     finally:
         conn.close()
 
