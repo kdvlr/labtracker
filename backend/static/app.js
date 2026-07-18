@@ -247,7 +247,9 @@ async function api(path, opts = {}) {
   if (!res.ok) {
     let msg = res.statusText;
     try { msg = (await res.json()).detail || msg; } catch {}
-    throw new Error(msg);
+    const err = new Error(msg);
+    err.status = res.status;
+    throw err;
   }
   return res.status === 204 ? null : res.json();
 }
@@ -1972,7 +1974,23 @@ function renderUpload(main) {
       fd.append("file", fileInput.files[0]);
       fd.append("member_id", memberSel.value);
       try {
-        const doc = await api("/documents", { method: "POST", body: fd });
+        let doc;
+        try {
+          doc = await api("/documents", { method: "POST", body: fd });
+        } catch (e) {
+          if (e.status === 409) {
+            if (confirm(e.message + "\n\nDo you want to upload it anyway?")) {
+              status.innerHTML = "";
+              status.append(el("span", {}, [el("span", { class: "spinner" }), " Uploading (forced)…"]));
+              doc = await api("/documents?force=true", { method: "POST", body: fd });
+            } else {
+              status.innerHTML = "";
+              return;
+            }
+          } else {
+            throw e;
+          }
+        }
         status.innerHTML = ""; status.append(el("span", {}, [el("span", { class: "spinner" }), " Extracting with AI… this can take ~20s"]));
         const result = await api(`/documents/${doc.id}/extract`, { method: "POST", body: {} });
         status.innerHTML = "";

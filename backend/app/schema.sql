@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS documents (
     -- JSON of the last extraction response, so an extracted-but-uncommitted
     -- report can be reopened and reviewed without re-running (re-paying for) AI.
     extraction TEXT,
+    file_hash TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
