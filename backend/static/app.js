@@ -220,12 +220,9 @@ const getUnlockToken = () => { try { return localStorage.getItem(UNLOCK_KEY); } 
 const setUnlockToken = (t) => { try { t ? localStorage.setItem(UNLOCK_KEY, t) : localStorage.removeItem(UNLOCK_KEY); } catch {} };
 
 async function api(path, opts = {}) {
+  const method = (opts.method || "GET").toUpperCase();
   const isSettingsPath = path.startsWith("/settings") || 
-                        ((path.startsWith("/members") || path.startsWith("/test-types")) && 
-                         !path.includes("/summary") && 
-                         !path.includes("/analysis") && 
-                         !path.includes("/documents") && 
-                         !path.includes("/results"));
+                        (method !== "GET" && (path.startsWith("/members") || path.startsWith("/test-types")));
   let tok = isSettingsPath ? state.settingsUnlockToken : getUnlockToken();
   if (opts.token !== undefined) {
     tok = opts.token;
