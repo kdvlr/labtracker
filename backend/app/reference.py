@@ -48,6 +48,12 @@ _RULES = [
 ]
 
 
+# The canonical set of panels, in a sensible display order. Derived from the
+# keyword rules so the manual-categorization dropdown and the AI categorizer can
+# never disagree about what a valid category is. "Other" is the catch-all.
+CATEGORIES = [cat for cat, _ in _RULES] + ["Other"]
+
+
 def categorize(name: str) -> str:
     n = (name or "").lower()
     for cat, kws in _RULES:
