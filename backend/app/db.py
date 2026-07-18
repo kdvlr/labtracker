@@ -76,6 +76,10 @@ def init_db() -> None:
         dcols = {r["name"] for r in conn.execute("PRAGMA table_info(documents)")}
         if "extraction" not in dcols:
             conn.execute("ALTER TABLE documents ADD COLUMN extraction TEXT")
+        scols = {r["name"] for r in conn.execute("PRAGMA table_info(unlock_sessions)")}
+        if "scope" not in scols:
+            conn.execute("ALTER TABLE unlock_sessions ADD COLUMN scope TEXT DEFAULT 'member'")
+            conn.commit()
             
         conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_member ON documents(member_id)")
 

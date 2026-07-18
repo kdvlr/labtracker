@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS members (
 CREATE TABLE IF NOT EXISTS unlock_sessions (
     token TEXT PRIMARY KEY,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    expires_at TEXT NOT NULL
+    expires_at TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'member'
 );
 
 CREATE TABLE IF NOT EXISTS test_types (
