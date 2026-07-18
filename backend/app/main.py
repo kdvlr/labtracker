@@ -1651,6 +1651,42 @@ def _stored_analysis(conn, member_id: int):
     return {"analysis": analysis, "results_hash": row["results_hash"], "generated_at": row["generated_at"]}
 
 
+@app.get("/api/members/analyses/counts")
+def list_analyses_counts(request: Request):
+    conn = get_db()
+    try:
+        vis = _visible(conn, request)
+        if not vis:
+            return {}
+        vis_list = list(vis)
+        placeholders = ",".join("?" for _ in vis_list)
+        rows = conn.execute(
+            f"SELECT member_id, analysis FROM member_analyses WHERE member_id IN ({placeholders})",
+            vis_list
+        ).fetchall()
+        
+        out = {}
+        for r in rows:
+            mid = r["member_id"]
+            try:
+                data = json.loads(r["analysis"])
+                problems = data.get("problem_areas", [])
+                urgent = sum(1 for p in problems if p.get("severity") == "urgent")
+                monitor = sum(1 for p in problems if p.get("severity") == "monitor")
+                minor = sum(1 for p in problems if p.get("severity") == "minor")
+                out[str(mid)] = {"urgent": urgent, "monitor": monitor, "minor": minor}
+            except Exception:
+                out[str(mid)] = {"urgent": 0, "monitor": 0, "minor": 0}
+        
+        for mid in vis_list:
+            if str(mid) not in out:
+                out[str(mid)] = {"urgent": 0, "monitor": 0, "minor": 0}
+                
+        return out
+    finally:
+        conn.close()
+
+
 @app.get("/api/members/{member_id}/analysis")
 def get_member_analysis(member_id: int, request: Request):
     """Return the cached whole-member analysis, flagged stale if results changed

@@ -328,6 +328,7 @@ body {
 .count-pill.out { background: var(--high-soft); color: var(--high); }
 .count-pill.borderline { background: var(--low-soft); color: var(--low); }
 .count-pill.in { background: var(--good-soft); color: var(--good); }
+.count-pill.minor { background: var(--panel-2); color: var(--muted); }
 .cat-body { display: flex; flex-direction: column; gap: 16px; padding: 4px 0 20px; }
 
 /* ---------- biomarker range card ---------- */
