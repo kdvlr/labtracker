@@ -1837,12 +1837,15 @@ function renderUpload(main) {
   const memberSel = el("select");
   for (const m of state.members) memberSel.append(el("option", { value: m.id, ...(m.id === state.activeMember ? { selected: "" } : {}) }, m.name));
 
+  let selectedFiles = [];
+
   const fileInput = el("input", { 
     type: "file", 
     accept: "image/*,application/pdf",
+    multiple: "",
     style: "display:none;"
   });
-  const fileStatusText = el("span", { style: "font-size: 14px; color: var(--muted); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px;" }, "No file selected");
+  const fileStatusText = el("span", { style: "font-size: 14px; color: var(--muted); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px;" }, "No files selected");
   const browseBtn = el("button", {
     type: "button",
     class: "btn btn-secondary",
@@ -1853,41 +1856,44 @@ function renderUpload(main) {
   const status = el("div", { style: "margin-top:12px" });
   const reviewMount = el("div", { style: "margin-top:20px" });
 
-  // iOS Safari's clipboard API only ever exposes images to a web page — never
-  // a PDF or other file, regardless of which "Copy" produced it (in-chat or
-  // the system share sheet; both were tested and neither works). That's a
-  // WebKit sandboxing limit, not something fixable here, so the iOS copy is
-  // scoped to what actually works: photos and screenshots.
   const ios = isIOS();
   const pasteInput = el("input", {
     type: "text",
-    placeholder: ios ? "Tap here to paste a photo or screenshot…" : "Tap here to paste a copied file…",
+    placeholder: ios ? "Tap here to paste photo(s) or screenshot(s)…" : "Tap here to paste copied file(s)…",
     style: "width: 100%; padding: 12px 16px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--panel); text-align: center; font-size: 15px; font-weight: 500; caret-color: transparent;"
   });
 
+  function updateFilesList() {
+    if (selectedFiles.length === 0) {
+      fileStatusText.textContent = "No files selected";
+      pasteInput.value = "";
+    } else if (selectedFiles.length === 1) {
+      fileStatusText.textContent = `📄 Attached: ${selectedFiles[0].name}`;
+      pasteInput.value = `📄 Attached: ${selectedFiles[0].name}`;
+    } else {
+      fileStatusText.textContent = `📁 Attached: ${selectedFiles.length} files`;
+      pasteInput.value = `📁 Attached: ${selectedFiles.length} files`;
+    }
+  }
+
   pasteInput.addEventListener("paste", async (e) => {
     e.preventDefault();
-    let file = null;
+    let files = [];
 
-    // 1. Check e.clipboardData.files first (standard file paste)
     if (e.clipboardData?.files && e.clipboardData.files.length > 0) {
-      file = e.clipboardData.files[0];
+      files = Array.from(e.clipboardData.files);
     }
 
-    // 2. Fallback to e.clipboardData.items iteration
-    if (!file && e.clipboardData?.items) {
+    if (files.length === 0 && e.clipboardData?.items) {
       for (const item of e.clipboardData.items) {
         if (item.kind === "file") {
-          file = item.getAsFile();
-          if (file) break;
+          const f = item.getAsFile();
+          if (f) files.push(f);
         }
       }
     }
 
-    // 3. Fallback to async navigator.clipboard.read() if available. Skip the
-    // PDF search on iOS — Safari never exposes application/pdf this way, so
-    // trying just costs a clipboard-permission prompt for nothing.
-    if (!file && navigator.clipboard && navigator.clipboard.read) {
+    if (files.length === 0 && navigator.clipboard && navigator.clipboard.read) {
       try {
         const data = await navigator.clipboard.read();
         for (const item of data) {
@@ -1896,8 +1902,9 @@ function renderUpload(main) {
           const targetType = pdfType || imgType;
           if (targetType) {
             const blob = await item.getType(targetType);
-            file = new File([blob], `pasted_file.${targetType.split("/")[1] || "bin"}`, { type: targetType });
-            break;
+            const ext = targetType.split("/")[1] || "bin";
+            const name = `pasted_file_${new Date().toISOString().slice(0, 10)}.${ext}`;
+            files.push(new File([blob], name, { type: targetType }));
           }
         }
       } catch (err) {
@@ -1905,20 +1912,13 @@ function renderUpload(main) {
       }
     }
 
-    if (file) {
+    if (files.length > 0) {
+      selectedFiles = files;
       const dt = new DataTransfer();
-      dt.items.add(file);
+      selectedFiles.forEach(f => dt.items.add(f));
       fileInput.files = dt.files;
-
-      let name = file.name || "";
-      if (!name) {
-        const ext = file.type.split("/")[1] || "png";
-        name = `clipboard_paste_${new Date().toISOString().slice(0, 10)}.${ext}`;
-      }
-
-      fileStatusText.textContent = `📋 Attached: ${name}`;
-      pasteInput.value = `📋 Attached: ${name}`;
-      toast("File pasted successfully!");
+      updateFilesList();
+      toast("Files pasted successfully!");
       return;
     }
 
@@ -1930,25 +1930,20 @@ function renderUpload(main) {
         const types = Array.from(e.clipboardData.types || []);
         if (types.length > 0) clipDesc = ` (contains: ${types.join(", ")})`;
       }
-      toast(`No file found in clipboard${clipDesc}.`);
+      toast(`No files found in clipboard${clipDesc}.`);
     }
   });
 
   fileInput.addEventListener("change", () => {
-    if (fileInput.files[0]) {
-      const file = fileInput.files[0];
-      fileStatusText.textContent = `📄 Attached: ${file.name}`;
-      pasteInput.value = "";
-    } else {
-      fileStatusText.textContent = "No file selected";
-    }
+    selectedFiles = Array.from(fileInput.files);
+    updateFilesList();
   });
 
   const card = el("div", { class: "card" }, [
     el("div", { class: "row" }, [
       el("div", { class: "field" }, [el("label", {}, "Family member"), memberSel]),
       el("div", { class: "field" }, [
-        el("label", {}, "Lab report file"),
+        el("label", {}, "Lab report files"),
         el("div", { style: "display: flex; align-items: center; gap: 12px; min-height: 48px;" }, [
           fileInput,
           browseBtn,
@@ -1958,45 +1953,105 @@ function renderUpload(main) {
     ]),
     el("div", { style: "text-align: center; margin: 10px 0 16px; color: var(--muted); font-size: 13.5px; font-weight: 600;" }, "— OR —"),
     el("div", { class: "field", style: "margin-bottom: 20px;" }, [
-      el("label", {}, ios ? "Paste a photo or screenshot" : "Paste a copied file (Mac/Windows)"),
+      el("label", {}, ios ? "Paste photo(s) or screenshot(s)" : "Paste copied file(s) (Mac/Windows)"),
       pasteInput,
-      // Persistent, not just a toast — a PDF sent over WhatsApp is the common
-      // case here, and this is the one instruction that matters for it.
       ios ? el("p", { class: "modal-lead", style: "margin:8px 2px 0; font-size:13.5px" },
         "For a PDF from WhatsApp: tap Share → Save to Files, then use Browse Files above. Pasting only works for photos on iPhone/iPad.") : null,
     ].filter(Boolean)),
     el("button", { class: "btn btn-primary", onclick: async () => {
-      if (!fileInput.files[0]) return toast("Choose or paste a file first");
+      if (selectedFiles.length === 0) return toast("Choose, drop or paste file(s) first");
       if (!memberSel.value) return toast("Add a family member first");
       status.innerHTML = ""; reviewMount.innerHTML = "";
-      status.append(el("span", {}, [el("span", { class: "spinner" }), " Uploading…"]));
-      const fd = new FormData();
-      fd.append("file", fileInput.files[0]);
-      fd.append("member_id", memberSel.value);
-      try {
-        let doc;
+
+      if (selectedFiles.length === 1) {
+        // Direct single file flow for maximum speed and inline editing
+        status.append(el("span", {}, [el("span", { class: "spinner" }), " Uploading…"]));
+        const fd = new FormData();
+        fd.append("file", selectedFiles[0]);
+        fd.append("member_id", memberSel.value);
         try {
-          doc = await api("/documents", { method: "POST", body: fd });
-        } catch (e) {
-          if (e.status === 409) {
-            if (confirm(e.message + "\n\nDo you want to upload it anyway?")) {
-              status.innerHTML = "";
-              status.append(el("span", {}, [el("span", { class: "spinner" }), " Uploading (forced)…"]));
-              doc = await api("/documents?force=true", { method: "POST", body: fd });
+          let doc;
+          try {
+            doc = await api("/documents", { method: "POST", body: fd });
+          } catch (e) {
+            if (e.status === 409) {
+              if (confirm(e.message + "\n\nDo you want to upload it anyway?")) {
+                status.innerHTML = "";
+                status.append(el("span", {}, [el("span", { class: "spinner" }), " Uploading (forced)…"]));
+                doc = await api("/documents?force=true", { method: "POST", body: fd });
+              } else {
+                status.innerHTML = "";
+                return;
+              }
             } else {
-              status.innerHTML = "";
-              return;
+              throw e;
             }
-          } else {
-            throw e;
+          }
+          status.innerHTML = ""; status.append(el("span", {}, [el("span", { class: "spinner" }), " Extracting with AI… this can take ~20s"]));
+          const result = await api(`/documents/${doc.id}/extract`, { method: "POST", body: {} });
+          status.innerHTML = "";
+          renderReview(reviewMount, doc, Number(memberSel.value), result);
+        } catch (e) {
+          status.innerHTML = ""; status.append(el("div", { class: "warn" }, "Error: " + e.message));
+        }
+      } else {
+        // Multi-file batch queue processing flow
+        const statusItems = selectedFiles.map(f => {
+          const label = el("span", { style: "font-weight:600; font-size:14px;" }, f.name);
+          const stat = el("span", { style: "color:var(--muted); font-size:13.5px; font-weight:600;" }, "Pending");
+          const row = el("div", { style: "display:flex; justify-content:space-between; align-items:center; padding: 10px 16px; border-bottom:1px solid var(--border);" }, [label, stat]);
+          return { file: f, row, stat };
+        });
+        status.append(el("div", { class: "card", style: "margin-top:12px; padding:0; border:1px solid var(--border); border-bottom:none;" }, statusItems.map(item => item.row)));
+
+        for (const item of statusItems) {
+          item.stat.innerHTML = `<span class="spinner" style="margin-right:6px"></span> Uploading…`;
+          const fd = new FormData();
+          fd.append("file", item.file);
+          fd.append("member_id", memberSel.value);
+          
+          let doc;
+          try {
+            doc = await api("/documents", { method: "POST", body: fd });
+          } catch (e) {
+            if (e.status === 409) {
+              if (confirm(`${item.file.name}\n\nThis file has already been uploaded.\n\nDo you want to upload it anyway?`)) {
+                item.stat.innerHTML = `<span class="spinner" style="margin-right:6px"></span> Uploading (forced)…`;
+                try {
+                  doc = await api("/documents?force=true", { method: "POST", body: fd });
+                } catch (err2) {
+                  item.stat.innerHTML = `❌ Error: ${err2.message}`;
+                  item.stat.style.color = "var(--high)";
+                  continue;
+                }
+              } else {
+                item.stat.innerHTML = `⚠️ Skipped (duplicate)`;
+                item.stat.style.color = "var(--muted)";
+                continue;
+              }
+            } else {
+              item.stat.innerHTML = `❌ Error: ${e.message}`;
+              item.stat.style.color = "var(--high)";
+              continue;
+            }
+          }
+          
+          item.stat.innerHTML = `<span class="spinner" style="margin-right:6px"></span> Extracting with AI…`;
+          try {
+            await api(`/documents/${doc.id}/extract`, { method: "POST", body: {} });
+            item.stat.innerHTML = `✓ Extracted`;
+            item.stat.style.color = "var(--low)";
+          } catch (e) {
+            item.stat.innerHTML = `❌ AI Error: ${e.message}`;
+            item.stat.style.color = "var(--high)";
           }
         }
-        status.innerHTML = ""; status.append(el("span", {}, [el("span", { class: "spinner" }), " Extracting with AI… this can take ~20s"]));
-        const result = await api(`/documents/${doc.id}/extract`, { method: "POST", body: {} });
-        status.innerHTML = "";
-        renderReview(reviewMount, doc, Number(memberSel.value), result);
-      } catch (e) {
-        status.innerHTML = ""; status.append(el("div", { class: "warn" }, "Error: " + e.message));
+
+        const completionMsg = el("div", { style: "margin-top: 16px; text-align: center;" }, [
+          el("p", { style: "font-weight:600; color:var(--low); margin-bottom: 12px; font-size:15px;" }, "✓ All documents processed!"),
+          el("button", { class: "btn btn-primary", onclick: () => navigateTo("documents") }, "Go to Documents to Review")
+        ]);
+        status.append(completionMsg);
       }
     } }, "Upload & extract"),
     status,
@@ -2013,11 +2068,12 @@ function renderUpload(main) {
     e.preventDefault();
     card.classList.remove("dragover");
     if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
-      fileInput.files = e.dataTransfer.files;
-      const file = e.dataTransfer.files[0];
-      fileStatusText.textContent = `📋 Attached: ${file.name}`;
-      pasteInput.value = `📋 Attached: ${file.name}`;
-      toast("File dropped successfully!");
+      selectedFiles = Array.from(e.dataTransfer.files);
+      const dt = new DataTransfer();
+      selectedFiles.forEach(f => dt.items.add(f));
+      fileInput.files = dt.files;
+      updateFilesList();
+      toast("Files dropped successfully!");
     }
   });
 
