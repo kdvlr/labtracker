@@ -1592,24 +1592,42 @@ def _analysis_inputs(conn, member_id: int):
             ref = f" (normal < {hi} {unit})"
         elif lo is not None:
             ref = f" (normal > {lo} {unit})"
-        series = []
-        for p in points:
+        def fmt_val(p):
             if p["value_canonical"] is not None:
-                val = f"{round(p['value_canonical'], 3)}"
-                if p["qualifier"]:
-                    val = f"{p['qualifier']}{val}"
-            else:
-                val = p["value_text"] or "—"
-            series.append(f"{str(p['taken_at'])[:10]}: {val}")
+                v = f"{round(p['value_canonical'], 3)}"
+                return f"{p['qualifier']}{v}" if p["qualifier"] else v
+            return p["value_text"] or "—"
+
+        # Points are oldest→newest. Mark the latest explicitly and note the span
+        # so the model can separate the recent turn from the long-run trajectory.
+        series = [f"{str(p['taken_at'])[:10]}: {fmt_val(p)}" for p in points]
+        latest = points[-1]
         status = status_by_id.get(tid, "")
-        lines.append(f"[{cat}] {name}{ref} — currently {status}\n    history: " + "; ".join(series))
+        n = len(points)
+        span = ""
+        if n > 1:
+            try:
+                from datetime import date as _date
+                d0 = _date.fromisoformat(str(points[0]["taken_at"])[:10])
+                d1 = _date.fromisoformat(str(latest["taken_at"])[:10])
+                yrs = (d1 - d0).days / 365.25
+                span = f" [{n} readings over {yrs:.1f}y]" if yrs >= 0.15 else f" [{n} readings]"
+            except ValueError:
+                span = f" [{n} readings]"
+        head = f"[{cat}] {name}{ref} — LATEST {str(latest['taken_at'])[:10]}: {fmt_val(latest)} ({status})"
+        if n > 1:
+            lines.append(head + f"\n    full history oldest→newest{span}: " + "; ".join(series))
+        else:
+            lines.append(head + "  (only one reading — no trend yet)")
 
     age = age_at(member["dob"]) if member and member["dob"] else None
     sex = (member["sex"] if member else None) or "not specified"
     age_str = f"{age} years old" if age is not None else "age not specified"
     body = (
         f"Patient: {age_str}, sex {sex}. {len(hist)} biomarkers tracked.\n\n"
-        "Complete lab history (every marker, oldest to newest reading):\n\n"
+        "Complete lab history. For each marker the LATEST reading (the current "
+        "state) is marked first, then the full history oldest→newest so you can "
+        "read short-term vs long-term trend:\n\n"
         + "\n".join(lines)
     )
     import hashlib

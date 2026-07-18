@@ -648,6 +648,19 @@ const SEVERITY = {
   monitor: { cls: "sev-monitor", label: "Monitor", icon: "🟡" },
   minor: { cls: "sev-minor", label: "Minor", icon: "⚪" },
 };
+const TREND = {
+  worsening: { cls: "warn", arrow: "↘", label: "worsening" },
+  improving: { cls: "good", arrow: "↗", label: "improving" },
+  stable: { cls: "flat", arrow: "→", label: "stable" },
+  new: { cls: "flat", arrow: "•", label: "new" },
+  insufficient: { cls: "flat", arrow: "·", label: "not enough history" },
+};
+// A small labelled chip for one trend horizon; null when the direction is unknown.
+function trendChip(horizon, dir) {
+  const t = TREND[dir];
+  if (!t) return null;
+  return el("span", { class: "trend-chip trend-" + t.cls }, `${horizon}: ${t.arrow} ${t.label}`);
+}
 
 async function renderHealthAnalysis(mount, member) {
   mount.innerHTML = "";
@@ -719,12 +732,19 @@ function renderAnalysisBody(card, data, member, regenerate) {
     card.append(el("div", { class: "analysis-section-label" }, "Areas to look at"));
     for (const p of problems) {
       const sev = SEVERITY[p.severity] || SEVERITY.minor;
+      // New schema splits trend into recent/long-term; fall back to the old
+      // single `trend` field for analyses cached before this change.
+      const recent = p.recent_trend || p.trend;
+      const longTerm = p.long_term_trend;
+      const trendChips = [trendChip("Recent", recent), trendChip("Long-term", longTerm)].filter(Boolean);
       const block = el("div", { class: "problem-card " + sev.cls }, [
         el("div", { class: "problem-head" }, [
           el("span", { class: "problem-title" }, p.title || "Concern"),
-          el("span", { class: "sev-pill" }, `${sev.icon} ${sev.label}${p.trend && p.trend !== "stable" ? " · " + p.trend : ""}`),
+          el("span", { class: "sev-pill" }, `${sev.icon} ${sev.label}`),
         ]),
+        trendChips.length ? el("div", { class: "trend-chips" }, trendChips) : null,
         p.explanation ? el("p", { class: "problem-body" }, p.explanation) : null,
+        p.trend_note ? el("p", { class: "trend-note" }, "📈 " + p.trend_note) : null,
         Array.isArray(p.markers) && p.markers.length
           ? el("div", { class: "problem-markers" }, p.markers.map((m) => el("span", { class: "marker-chip" }, m)))
           : null,
@@ -738,17 +758,22 @@ function renderAnalysisBody(card, data, member, regenerate) {
     card.append(el("div", { class: "analysis-allclear" }, "✓ No specific concerns flagged in this review."));
   }
 
-  // Trends
+  // Trends — each marker gets a short-term and a long-term horizon (with
+  // fallback to the pre-split `direction` field for older cached analyses).
   const trends = Array.isArray(a.trends) ? a.trends : [];
   if (trends.length) {
-    card.append(el("div", { class: "analysis-section-label" }, "Notable trends over time"));
+    card.append(el("div", { class: "analysis-section-label" }, "Trends over time (recent vs. long-term)"));
     const list = el("div", { class: "trend-list" });
     for (const t of trends) {
-      const up = t.direction === "improving";
+      const recent = t.recent_trend || t.direction;
+      const chips = [trendChip("Recent", recent), trendChip("Long-term", t.long_term_trend)].filter(Boolean);
       list.append(el("div", { class: "trend-row" }, [
-        el("span", { class: "trend-arrow " + (up ? "good" : "warn") }, up ? "↗" : "↘"),
-        el("span", {}, [el("strong", {}, (t.marker || "") + ": "), t.detail || ""]),
-      ]));
+        el("div", { class: "trend-row-head" }, [
+          el("strong", {}, t.marker || ""),
+          ...chips,
+        ]),
+        t.detail ? el("div", { class: "trend-detail" }, t.detail) : null,
+      ].filter(Boolean)));
     }
     card.append(list);
   }
