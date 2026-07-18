@@ -833,6 +833,49 @@ textarea { resize: vertical; }
 }
 
 /* Modal categorizations diff table */
+/* ---------- whole-member AI health analysis ---------- */
+.analysis-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 20px 22px; margin-bottom: 22px;
+}
+.analysis-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.analysis-title { font-family: var(--sans-display); font-weight: 600; font-size: 19px; color: var(--accent); }
+.analysis-loading { display: flex; align-items: center; gap: 14px; padding: 8px 0; }
+.analysis-headline { font-size: 17px; line-height: 1.6; margin: 14px 0 6px; color: var(--text-primary); }
+.analysis-section-label {
+  font-family: var(--sans-display); font-size: 12px; font-weight: 600; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--muted); margin: 22px 0 10px;
+}
+.analysis-allclear { color: var(--good); font-weight: 600; margin-top: 12px; }
+.analysis-stale {
+  margin-top: 12px; padding: 10px 14px; border-radius: var(--radius-sm);
+  background: var(--low-soft); color: var(--low); font-size: 14.5px; font-weight: 500;
+}
+.linkish { background: none; border: none; color: inherit; font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; padding: 0; }
+
+.problem-card { border-radius: var(--radius-sm); border: 1px solid var(--border); border-left-width: 5px; padding: 14px 16px; margin-bottom: 12px; background: var(--panel-2); }
+.problem-card.sev-urgent { border-left-color: var(--high); background: var(--high-soft); }
+.problem-card.sev-monitor { border-left-color: var(--low); background: var(--low-soft); }
+.problem-card.sev-minor { border-left-color: var(--baseline); }
+.problem-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.problem-title { font-weight: 600; font-size: 16px; }
+.sev-pill { font-size: 12.5px; font-weight: 600; color: var(--text-secondary); white-space: nowrap; }
+.problem-body { margin: 8px 0 0; font-size: 15px; line-height: 1.55; color: var(--text-secondary); }
+.problem-markers { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.marker-chip { font-size: 12.5px; font-weight: 600; padding: 3px 10px; border-radius: var(--radius-pill); background: var(--panel); border: 1px solid var(--border); color: var(--text-secondary); }
+.problem-actions { margin: 10px 0 0; padding-left: 20px; }
+.problem-actions li { margin-bottom: 5px; font-size: 15px; line-height: 1.5; }
+
+.trend-list { display: flex; flex-direction: column; gap: 8px; }
+.trend-row { display: flex; gap: 10px; align-items: baseline; font-size: 15px; line-height: 1.5; }
+.trend-arrow { font-weight: 700; font-size: 17px; flex: none; }
+.trend-arrow.good { color: var(--good); }
+.trend-arrow.warn { color: var(--low); }
+.positive-list, .doctor-list { margin: 0; padding-left: 20px; }
+.positive-list li, .doctor-list li { margin-bottom: 6px; font-size: 15px; line-height: 1.5; }
+.positive-list li { color: var(--good); }
+.analysis-disclaimer { margin: 20px 0 0; font-size: 13px; color: var(--muted); font-style: italic; }
+
 .diff-table {
   width: 100%;
   border-collapse: collapse;
