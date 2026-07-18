@@ -1141,14 +1141,16 @@ def get_extraction(doc_id: int, request: Request):
                 "result_id": it["result_id"]
             })
             
-        # Try to parse provider and model from extraction fallback
+        # Try to parse provider, model, and error from extraction fallback
         provider = None
         model = None
+        error = None
         if doc["extraction"]:
             try:
                 ext_payload = json.loads(doc["extraction"])
                 provider = ext_payload.get("provider")
                 model = ext_payload.get("model")
+                error = ext_payload.get("error")
             except Exception:
                 pass
                 
@@ -1160,7 +1162,8 @@ def get_extraction(doc_id: int, request: Request):
             "status": doc["status"],
             "provider": provider,
             "model": model,
-            "items": item_list
+            "items": item_list,
+            "error": error
         }
     finally:
         conn.close()

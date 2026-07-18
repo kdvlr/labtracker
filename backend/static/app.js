@@ -1987,10 +1987,23 @@ function renderUpload(main) {
               throw e;
             }
           }
-          status.innerHTML = ""; status.append(el("span", {}, [el("span", { class: "spinner" }), " Extracting with AI… this can take ~20s"]));
-          const result = await api(`/documents/${doc.id}/extract`, { method: "POST", body: {} });
-          status.innerHTML = "";
-          renderReview(reviewMount, doc, Number(memberSel.value), result);
+          let result;
+          if (doc.extraction) {
+            try {
+              result = JSON.parse(doc.extraction);
+            } catch (err) {
+              console.error("Failed parsing cached extraction:", err);
+            }
+          }
+          if (result && !result.error) {
+            status.innerHTML = "";
+            renderReview(reviewMount, doc, Number(memberSel.value), result);
+          } else {
+            status.innerHTML = ""; status.append(el("span", {}, [el("span", { class: "spinner" }), " Extracting with AI… this can take ~20s"]));
+            result = await api(`/documents/${doc.id}/extract`, { method: "POST", body: {} });
+            status.innerHTML = "";
+            renderReview(reviewMount, doc, Number(memberSel.value), result);
+          }
         } catch (e) {
           status.innerHTML = ""; status.append(el("div", { class: "warn" }, "Error: " + e.message));
         }
@@ -2036,14 +2049,23 @@ function renderUpload(main) {
             }
           }
           
-          item.stat.innerHTML = `<span class="spinner" style="margin-right:6px"></span> Extracting with AI…`;
-          try {
-            await api(`/documents/${doc.id}/extract`, { method: "POST", body: {} });
+          let extObj;
+          if (doc.extraction) {
+            try { extObj = JSON.parse(doc.extraction); } catch {}
+          }
+          if (extObj && !extObj.error) {
             item.stat.innerHTML = `✓ Extracted`;
             item.stat.style.color = "var(--low)";
-          } catch (e) {
-            item.stat.innerHTML = `❌ AI Error: ${e.message}`;
-            item.stat.style.color = "var(--high)";
+          } else {
+            item.stat.innerHTML = `<span class="spinner" style="margin-right:6px"></span> Extracting with AI…`;
+            try {
+              await api(`/documents/${doc.id}/extract`, { method: "POST", body: {} });
+              item.stat.innerHTML = `✓ Extracted`;
+              item.stat.style.color = "var(--low)";
+            } catch (e) {
+              item.stat.innerHTML = `❌ AI Error: ${e.message}`;
+              item.stat.style.color = "var(--high)";
+            }
           }
         }
 
@@ -2206,8 +2228,46 @@ function createCollapsible(title, count, contentEl, defaultOpen = false) {
   return wrapper;
 }
 
-function renderReview(mount, doc, memberId, result, main) {
+function renderReview(mount, doc, memberId, result, main, errorMsg, isLegacy) {
   mount.innerHTML = "";
+  
+  if (errorMsg) {
+    const bannerStatus = el("span", { style: "margin-left: 12px; vertical-align: middle;" });
+    const extractBtn = el("button", { 
+      class: "btn btn-primary", 
+      style: "margin: 0;",
+      onclick: async () => {
+        extractBtn.disabled = true;
+        bannerStatus.innerHTML = ""; 
+        bannerStatus.append(el("span", {}, [el("span", { class: "spinner" }), " Extracting with AI… this can take ~20s"]));
+        try {
+          const newResult = await api(`/documents/${doc.id}/extract`, { method: "POST", body: {} });
+          toast("Extraction complete!");
+          // Re-render the review page with the fresh extraction results
+          renderReview(mount, doc, memberId, newResult, main);
+        } catch (err) {
+          toast("Extraction failed: " + err.message);
+          extractBtn.disabled = false;
+          bannerStatus.innerHTML = "";
+          bannerStatus.append(el("span", { class: "warn", style: "margin-left: 8px; color: var(--high);" }, "Error: " + err.message));
+        }
+      } 
+    }, isLegacy ? "Extract with AI" : "🔄 Retry extraction");
+
+    const errorCard = el("div", { 
+      class: "card", 
+      style: "padding: 16px; margin-bottom: 16px; border-left: 4px solid var(--accent); background: var(--page-tint);" 
+    }, [
+      el("h4", { style: "margin: 0 0 8px; color: var(--accent); font-size: 15px;" }, isLegacy ? "Ready for AI Extraction" : "Extraction Issue"),
+      el("p", { class: "page-sub", style: "margin: 0 0 12px; font-size: 13.5px;" }, errorMsg),
+      el("div", {}, [
+        extractBtn,
+        bannerStatus
+      ])
+    ]);
+    mount.append(errorCard);
+  }
+  
   const dateInput = el("input", { type: "date", value: (result.report_date || "").slice(0, 10) || new Date().toISOString().slice(0, 10) });
   
   // Categorize items
@@ -2885,35 +2945,36 @@ async function renderReviewDoc(main) {
   const status = el("div", { style: "margin-bottom:14px" }, [el("span", { class: "spinner" }), " Loading extracted results…"]);
   main.append(status, mount);
 
-  const showExtractButton = (msg, isErr = false) => {
-    status.innerHTML = "";
-    status.append(
-      el("div", { class: isErr ? "warn" : "page-sub", style: "margin-bottom:12px;max-width:600px" }, msg),
-      el("button", { class: "btn btn-primary", onclick: async () => {
-        status.innerHTML = ""; status.append(el("span", {}, [el("span", { class: "spinner" }), " Extracting with AI… this can take ~20s"]));
-        try {
-          const result = await api(`/documents/${doc.id}/extract`, { method: "POST", body: {} });
-          status.innerHTML = "";
-          renderReview(mount, doc, () => Number(memberSel.value), result, main);
-        } catch (e) {
-          showExtractButton("Error: " + e.message, true);
-        }
-      } }, isErr ? "🔄 Retry extraction" : "Extract with AI"),
-    );
-  };
+  let result = null;
+  let errorMsg = null;
+  let isLegacy = false;
 
   try {
-    const result = await api(`/documents/${doc.id}/extraction`);
+    result = await api(`/documents/${doc.id}/extraction`);
     status.innerHTML = "";
     if (result && result.error) {
-      showExtractButton("Extraction failed: " + result.error, true);
-    } else {
-      renderReview(mount, doc, () => Number(memberSel.value), result, main);
+      errorMsg = result.error;
     }
   } catch (e) {
-    // No saved extraction yet (older upload) — offer to run it.
-    showExtractButton("This report hasn't been read by AI yet.");
+    status.innerHTML = "";
+    isLegacy = true;
+    errorMsg = "This report hasn't been read by AI yet.";
   }
+
+  if (!result) {
+    result = {
+      document_id: doc.id,
+      report_date: doc.report_date,
+      lab_name: doc.lab_name,
+      patient_name: null,
+      status: doc.status,
+      provider: null,
+      model: null,
+      items: []
+    };
+  }
+
+  renderReview(mount, doc, () => Number(memberSel.value), result, main, errorMsg, isLegacy);
 }
 
 // ---------------- doctor-visit report (printable) ----------------
