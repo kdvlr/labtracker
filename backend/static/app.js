@@ -222,7 +222,14 @@ const setUnlockToken = (t) => { try { t ? localStorage.setItem(UNLOCK_KEY, t) : 
 async function api(path, opts = {}) {
   const method = (opts.method || "GET").toUpperCase();
   const isSettingsPath = path.startsWith("/settings") || 
-                        (method !== "GET" && (path.startsWith("/members") || path.startsWith("/test-types")));
+                        (method !== "GET" && (
+                          (path.startsWith("/members") && 
+                           !path.includes("/analysis") && 
+                           !path.includes("/summary") && 
+                           !path.includes("/documents") && 
+                           !path.includes("/results")) ||
+                          path.startsWith("/test-types")
+                        ));
   let tok = isSettingsPath ? state.settingsUnlockToken : getUnlockToken();
   if (opts.token !== undefined) {
     tok = opts.token;
