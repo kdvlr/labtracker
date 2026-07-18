@@ -622,6 +622,23 @@ async def upload_document(
     data = await file.read()
     if not data:
         raise HTTPException(400, "Empty file")
+    
+    import hashlib
+    file_hash = hashlib.sha256(data).hexdigest()
+    
+    # Check for duplicate file hash
+    _check_conn = get_db()
+    try:
+        existing = _check_conn.execute("SELECT id, filename FROM documents WHERE file_hash = ?", (file_hash,)).fetchone()
+        if existing:
+            if not request.query_params.get("force") == "true":
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"This file has already been uploaded as document #{existing['id']} ('{existing['filename']}')."
+                )
+    finally:
+        _check_conn.close()
+
     mime = file.content_type or mimetypes.guess_type(file.filename or "")[0] or "application/octet-stream"
     ext = Path(file.filename or "").suffix or mimetypes.guess_extension(mime) or ""
     
@@ -649,9 +666,9 @@ async def upload_document(
             stored_name = f"{sanitized_person_name}/{temp_filename}"
 
             conn.execute(
-                """INSERT INTO documents (member_id, filename, stored_name, mime, size, status, extraction)
-                   VALUES (?, ?, ?, ?, ?, 'failed', ?)""",
-                (member_id, file.filename, stored_name, mime, len(data), json.dumps({"error": error_msg})),
+                """INSERT INTO documents (member_id, filename, stored_name, mime, size, status, extraction, file_hash)
+                   VALUES (?, ?, ?, ?, ?, 'failed', ?, ?)""",
+                (member_id, file.filename, stored_name, mime, len(data), json.dumps({"error": error_msg}), file_hash),
             )
             conn.commit()
             raise HTTPException(400, error_msg)
@@ -669,9 +686,9 @@ async def upload_document(
                 stored_name = f"{sanitized_person_name}/{temp_filename}"
 
                 conn.execute(
-                    """INSERT INTO documents (member_id, filename, stored_name, mime, size, status, extraction)
-                       VALUES (?, ?, ?, ?, ?, 'failed', ?)""",
-                    (member_id, file.filename, stored_name, mime, len(data), json.dumps({"error": error_msg})),
+                    """INSERT INTO documents (member_id, filename, stored_name, mime, size, status, extraction, file_hash)
+                       VALUES (?, ?, ?, ?, ?, 'failed', ?, ?)""",
+                    (member_id, file.filename, stored_name, mime, len(data), json.dumps({"error": error_msg}), file_hash),
                 )
                 conn.commit()
                 raise HTTPException(400, error_msg)
@@ -766,9 +783,9 @@ async def upload_document(
         
         # Insert into documents table
         cur = conn.execute(
-            """INSERT INTO documents (member_id, filename, stored_name, mime, size, report_date, lab_name, status, extraction)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 'needs_review', ?)""",
-            (member_id, final_filename, stored_name, mime, len(data), report_date, lab_name, json.dumps(extraction_res)),
+            """INSERT INTO documents (member_id, filename, stored_name, mime, size, report_date, lab_name, status, extraction, file_hash)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'needs_review', ?, ?)""",
+            (member_id, final_filename, stored_name, mime, len(data), report_date, lab_name, json.dumps(extraction_res), file_hash),
         )
         doc_id = cur.lastrowid
         
