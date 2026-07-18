@@ -1104,9 +1104,10 @@ def get_extraction(doc_id: int, request: Request):
     conn = get_db()
     try:
         _require_doc(conn, request, doc_id)
-        doc = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
-        if not doc:
+        row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+        if not row:
             raise HTTPException(404, "Not found")
+        doc = dict(row)
             
         items = conn.execute("SELECT * FROM document_items WHERE document_id = ?", (doc_id,)).fetchall()
         
