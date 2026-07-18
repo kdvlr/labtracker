@@ -1126,11 +1126,12 @@ async function renderHousehold(main) {
   main.append(mount);
   mount.append(el("div", { class: "empty" }, [el("span", { class: "spinner" }), " Loading household…"]));
 
-  // One summary per member; a household is small, so parallel is fine and this
-  // reuses the exact same status logic the dashboard uses.
-  let summaries;
+  let summaries, counts;
   try {
-    summaries = await Promise.all(state.members.map((m) => api(`/members/${m.id}/summary`)));
+    [summaries, counts] = await Promise.all([
+      Promise.all(state.members.map((m) => api(`/members/${m.id}/summary`))),
+      api("/members/analyses/counts")
+    ]);
   } catch (e) {
     mount.innerHTML = "";
     mount.append(el("div", { class: "warn" }, "Couldn't load household: " + e.message));
@@ -1140,11 +1141,8 @@ async function renderHousehold(main) {
 
   state.members.forEach((m, i) => {
     const summary = summaries[i] || [];
-    const red = summary.filter((s) => statusOf(s) === "red");
-    const amber = summary.filter((s) => statusOf(s) === "amber");
-    const green = summary.filter((s) => statusOf(s) === "green");
-    const attention = [...red, ...amber];
     const latest = summary.reduce((a, s) => (!a || (s.latest_at || "") > a ? (s.latest_at || "") : a), "");
+    const mCounts = counts[String(m.id)] || { urgent: 0, monitor: 0, minor: 0 };
 
     const card = el("div", { class: "hh-card" }, [
       el("div", { class: "hh-head", onclick: () => { navigateTo("overview", { activeMember: m.id }); } }, [
@@ -1166,35 +1164,16 @@ async function renderHousehold(main) {
       return;
     }
 
-    card.append(el("div", { class: "hh-pills" }, [
-      red.length ? el("span", { class: "count-pill out" }, `${red.length} out of range`) : null,
-      amber.length ? el("span", { class: "count-pill borderline" }, `${amber.length} borderline`) : null,
-      green.length ? el("span", { class: "count-pill in" }, `${green.length} in range`) : null,
-    ].filter(Boolean)));
-
-    if (!attention.length) {
-      card.append(el("div", { class: "hh-allclear" }, "✓ Nothing out of range"));
-    } else {
-      const list = el("div", { class: "hh-list" });
-      attention.slice(0, 6).forEach((s) => {
-        const c = statusOf(s);
-        list.append(el("button", {
-          class: "hh-item",
-          onclick: () => { state.activeMember = m.id; openDetail(m, s.test_type_id); },
-        }, [
-          el("span", { class: "hh-dot " + c }),
-          el("span", { class: "hh-item-name" }, s.name),
-          el("span", { class: "spacer" }),
-          el("span", { class: "hh-item-val " + c }, isQualitative(s)
-            ? s.latest.value_text
-            : `${fmtVal(s.latest?.value_canonical, s.latest?.qualifier)} ${s.canonical_unit || ""}`),
-        ]));
-      });
-      if (attention.length > 6) {
-        list.append(el("div", { class: "hh-more" }, `+ ${attention.length - 6} more`));
-      }
-      card.append(list);
+    const pills = [];
+    if (mCounts.urgent) pills.push(el("span", { class: "count-pill out" }, `${mCounts.urgent} urgent`));
+    if (mCounts.monitor) pills.push(el("span", { class: "count-pill borderline" }, `${mCounts.monitor} monitoring`));
+    if (mCounts.minor) pills.push(el("span", { class: "count-pill minor" }, `${mCounts.minor} minor`));
+    
+    if (pills.length === 0) {
+      pills.push(el("span", { class: "count-pill minor" }, "No concerns flagged"));
     }
+
+    card.append(el("div", { class: "hh-pills", style: "margin-bottom: 0;" }, pills));
     mount.append(card);
   });
 }
