@@ -866,11 +866,18 @@ textarea { resize: vertical; }
 .problem-actions { margin: 10px 0 0; padding-left: 20px; }
 .problem-actions li { margin-bottom: 5px; font-size: 15px; line-height: 1.5; }
 
-.trend-list { display: flex; flex-direction: column; gap: 8px; }
-.trend-row { display: flex; gap: 10px; align-items: baseline; font-size: 15px; line-height: 1.5; }
-.trend-arrow { font-weight: 700; font-size: 17px; flex: none; }
-.trend-arrow.good { color: var(--good); }
-.trend-arrow.warn { color: var(--low); }
+/* trend chips — one per horizon (recent / long-term), color by direction */
+.trend-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.trend-chip { font-size: 12.5px; font-weight: 600; padding: 3px 10px; border-radius: var(--radius-pill); border: 1px solid var(--border); white-space: nowrap; }
+.trend-chip.trend-good { color: var(--good); background: var(--good-soft); border-color: color-mix(in srgb, var(--good) 25%, transparent); }
+.trend-chip.trend-warn { color: var(--low); background: var(--low-soft); border-color: color-mix(in srgb, var(--low) 30%, transparent); }
+.trend-chip.trend-flat { color: var(--muted); background: var(--panel-2); }
+.trend-note { margin: 10px 0 0; font-size: 14px; line-height: 1.5; color: var(--text-secondary); }
+
+.trend-list { display: flex; flex-direction: column; gap: 12px; }
+.trend-row { font-size: 15px; line-height: 1.5; }
+.trend-row-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.trend-detail { margin-top: 3px; color: var(--text-secondary); }
 .positive-list, .doctor-list { margin: 0; padding-left: 20px; }
 .positive-list li, .doctor-list li { margin-bottom: 6px; font-size: 15px; line-height: 1.5; }
 .positive-list li { color: var(--good); }
