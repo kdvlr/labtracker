@@ -36,6 +36,15 @@ async def add_no_cache_headers(request, call_next):
 @app.on_event("startup")
 def _startup():
     init_db()
+    # Forgotten-PIN recovery: honour a RESET_PIN sentinel dropped in the data
+    # volume by someone with server access. See access.maybe_reset_pin.
+    from .config import DATA_DIR
+
+    conn = get_db()
+    try:
+        access.maybe_reset_pin(conn, DATA_DIR)
+    finally:
+        conn.close()
 
 
 # ---------------- private-profile access ----------------
@@ -491,7 +500,10 @@ def describe_test_type(tt_id: int, request: Request, member_id: Optional[int] = 
                             if rh['value_canonical'] is not None:
                                 val_str = f"{round(rh['value_canonical'], 3)} {rr['canonical_unit'] or ''}"
                             else:
-                                val_str = str(rh['value_text'] or rh['value'] or '')
+                                # NB: `value` is not in this SELECT — referencing it
+                                # raised IndexError on any row with neither a
+                                # canonical value nor text.
+                                val_str = str(rh['value_text'] or '—')
                             flag_str = f" ({rh['flag']})" if rh['flag'] else ""
                             h_lines.append(f"  * {rh['taken_at']}: {val_str}{flag_str}")
                         related_readings.append(f"- {rr['name']}:\n" + "\n".join(h_lines))
@@ -860,8 +872,13 @@ def list_documents(
             placeholders = ",".join("?" for _ in vis_list)
             params = list(vis_list)
             
+        # Columns named explicitly to EXCLUDE d.extraction — the raw AI JSON is
+        # tens of KB per document, is already parsed into document_items, and is
+        # never used by the list view. `SELECT d.*` was shipping it on every load.
         query = """
-            SELECT d.*, m.name AS member_name,
+            SELECT d.id, d.member_id, d.filename, d.stored_name, d.mime, d.size,
+                   d.report_date, d.lab_name, d.note, d.status, d.created_at,
+                   m.name AS member_name,
                    (SELECT COUNT(*) FROM results r WHERE r.document_id = d.id) AS result_count
             FROM documents d
             LEFT JOIN members m ON m.id = d.member_id
@@ -1654,11 +1671,36 @@ def _analysis_inputs(conn, member_id: int):
         "read short-term vs long-term trend:\n\n"
         + "\n".join(lines)
     )
-    import hashlib
-    h = hashlib.sha256(
-        "|".join(f"{r['test_type_id']}:{r['taken_at']}:{r['value_canonical']}:{r['value_text']}" for r in rows).encode()
-    ).hexdigest()
+    # Reuse the one fingerprint definition so a cached analysis can never look
+    # stale merely because two code paths hashed the same rows in a different
+    # order.
+    h, _ = _results_fingerprint(conn, member_id)
     return body, h, len(hist)
+
+
+def _results_fingerprint(conn, member_id: int):
+    """(hash, marker_count) for a member's results — the cheap half of
+    _analysis_inputs. Staleness only needs to know whether the data changed, so
+    this skips building the multi-KB AI prompt string that the full builder
+    produces (that was being done on every overview page load just to derive a
+    boolean)."""
+    import hashlib
+
+    rows = conn.execute(
+        """SELECT test_type_id, taken_at, value_canonical, value_text
+           FROM results WHERE member_id = ?
+           ORDER BY test_type_id, taken_at""",
+        (member_id,),
+    ).fetchall()
+    if not rows:
+        return None, 0
+    h = hashlib.sha256(
+        "|".join(
+            f"{r['test_type_id']}:{r['taken_at']}:{r['value_canonical']}:{r['value_text']}"
+            for r in rows
+        ).encode()
+    ).hexdigest()
+    return h, len({r["test_type_id"] for r in rows})
 
 
 def _stored_analysis(conn, member_id: int):
@@ -1720,8 +1762,11 @@ def get_member_analysis(member_id: int, request: Request):
         _require_member(conn, request, member_id)
         stored = _stored_analysis(conn, member_id)
         if not stored:
-            return {"analysis": None, "generated_at": None, "stale": False, "has_data": bool(_summary_for(conn, member_id))}
-        _, cur_hash, marker_count = _analysis_inputs(conn, member_id)
+            # Cheap existence check — no need to load or format the full summary.
+            _, n_markers = _results_fingerprint(conn, member_id)
+            return {"analysis": None, "generated_at": None, "stale": False,
+                    "has_data": n_markers > 0, "marker_count": n_markers}
+        cur_hash, marker_count = _results_fingerprint(conn, member_id)
         return {
             "analysis": stored["analysis"],
             "generated_at": stored["generated_at"],
