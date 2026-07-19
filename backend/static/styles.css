@@ -31,6 +31,15 @@
      white on the pastels would be 1.7-2.0:1, which is why this is a variable
      and not just "#fff". */
   --chip-ink: #ffffff;
+  /* "Stable" is the one pill that cannot follow --chip-ink. A yellow dark
+     enough to carry white text is the palette's #8a5713, which reads brown.
+     A yellow bright enough to read as yellow can only take dark ink. So this
+     pill inverts: bright fill, dark ink — always, in both themes.
+     Brightening costs edge separation (this fill is 1.4:1 against the pale
+     monitor card it sits on), so the border does that job instead at 4.6-6.1:1. */
+  --trend-stable-fill: #f5c542;
+  --trend-stable-border: #8a5713;
+  --trend-stable-ink: #10161c;
   --range-in: #2b6b47;
   --range-out: #faeae8;
   --range-warn: #fbf0dc;
@@ -75,6 +84,11 @@
     --low: #e9c07a;
     --low-soft: rgba(120, 78, 22, 0.42);
     --chip-ink: #10161c;   /* near-black on the pastel fills: 6.2-10.7:1 */
+    /* Dark mode's --low is already a bright pastel yellow carrying dark ink at
+       10.7:1, so the stable pill needs no inversion here — only the border
+       differs, matching its own fill since the dark cards give it 8:1 anyway. */
+    --trend-stable-fill: #e9c07a;
+    --trend-stable-border: #e9c07a;
     --range-in: #7fd39a;
     --range-out: #7c2b25;
     --range-warn: #5c3d00;
@@ -884,7 +898,7 @@ textarea { resize: vertical; }
    gives it, which matters on a phone held at arm's length. --chip-ink flips per
    theme because the palette does; see its definition. */
 .trend-chip.trend-good { background: var(--good); color: var(--chip-ink); border-color: var(--good); }
-.trend-chip.trend-warn { background: var(--low);  color: var(--chip-ink); border-color: var(--low); }
+.trend-chip.trend-warn { background: var(--trend-stable-fill); color: var(--trend-stable-ink); border-color: var(--trend-stable-border); }
 .trend-chip.trend-bad  { background: var(--high); color: var(--chip-ink); border-color: var(--high); }
 /* "new" / "not enough history": desaturated so an absence of trend stays quiet
    next to the coloured ones, while matching their solid shape. */
