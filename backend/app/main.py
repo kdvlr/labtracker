@@ -414,6 +414,126 @@ def _calculate_age(dob_str: Optional[str]) -> Optional[int]:
         return None
 
 
+def _marker_history_lines(conn, member_id: int, tt_ids: Optional[list] = None,
+                          include_category: bool = True, reported_units: bool = False):
+    """Dense per-marker history lines for many markers, built from ONE query.
+
+    Each line carries strictly more than a bare list of readings: the unit and
+    the resolved reference range stated once, the latest reading marked as the
+    current state with its in/out-of-range verdict, the reading count and the
+    span in years, then the whole series oldest→newest. Naming the unit and
+    range once per marker instead of once per reading is what buys the room to
+    keep every reading and still add the range and status that a per-reading
+    format has no space for.
+
+    tt_ids=None means every marker this member has. Returns
+    (ordered_lines, lines_by_tt_id) so a caller can pull out a single marker or
+    take the lot.
+    """
+    params = [member_id]
+    where = "r.member_id = ?"
+    if tt_ids is not None:
+        if not tt_ids:
+            return [], {}
+        where += f" AND r.test_type_id IN ({','.join('?' * len(tt_ids))})"
+        params += list(tt_ids)
+
+    # One round trip for every marker asked for. This replaced a per-marker
+    # query in describe_test_type that issued one SELECT per marker in the
+    # panel — 28 extra queries for a Blood panel — on every generation.
+    rows = conn.execute(
+        f"""SELECT r.test_type_id, r.taken_at, r.value, r.unit, r.value_canonical,
+                   r.value_text, r.flag, r.qualifier,
+                   t.name, t.canonical_unit, t.category
+            FROM results r JOIN test_types t ON t.id = r.test_type_id
+            WHERE {where} ORDER BY t.category, t.name, r.taken_at""",
+        params,
+    ).fetchall()
+
+    hist = {}
+    for r in rows:
+        hist.setdefault(r["test_type_id"], []).append(r)
+
+    # Ranges and in/out status come from the same resolved (sex/age-aware)
+    # ranges the UI shows, so the model never disagrees with the screen.
+    summary = _summary_for(conn, member_id)
+    ref_by_id, status_by_id = {}, {}
+    for s in summary:
+        tid = s["test_type_id"]
+        lo, hi = s.get("ref_low"), s.get("ref_high")
+        ref_by_id[tid] = (lo, hi)
+        v = s["latest"]["value_canonical"] if s.get("latest") else None
+        if v is None:
+            status_by_id[tid] = "text/qualitative"
+        elif (lo is not None and v < lo) or (hi is not None and v > hi):
+            status_by_id[tid] = "OUT OF RANGE"
+        else:
+            status_by_id[tid] = "in range"
+
+    def fmt_val(p):
+        if p["value_canonical"] is not None:
+            v = f"{round(p['value_canonical'], 3)}"
+            if p["qualifier"]:
+                v = f"{p['qualifier']}{v}"
+        else:
+            v = p["value_text"] or "—"
+        # The lab's own H/L flag on that reading — three characters, and it
+        # tells the model which past readings the lab itself called abnormal.
+        if p["flag"]:
+            v += f"({p['flag']})"
+        return v
+
+    lines, by_id = [], {}
+    for tid, points in hist.items():
+        name = points[0]["name"]
+        unit = points[0]["canonical_unit"] or ""
+        lo, hi = ref_by_id.get(tid, (None, None))
+        if lo is not None and hi is not None:
+            ref = f" (normal {lo}–{hi} {unit})"
+        elif hi is not None:
+            ref = f" (normal < {hi} {unit})"
+        elif lo is not None:
+            ref = f" (normal > {lo} {unit})"
+        else:
+            ref = f" ({unit})" if unit else ""
+
+        latest = points[-1]
+        n = len(points)
+        span = ""
+        if n > 1:
+            try:
+                from datetime import date as _date
+                d0 = _date.fromisoformat(str(points[0]["taken_at"])[:10])
+                d1 = _date.fromisoformat(str(latest["taken_at"])[:10])
+                yrs = (d1 - d0).days / 365.25
+                span = f" [{n} readings over {yrs:.1f}y]" if yrs >= 0.15 else f" [{n} readings]"
+            except ValueError:
+                span = f" [{n} readings]"
+
+        cat = f"[{points[0]['category'] or 'Other'}] " if include_category else ""
+        head = (f"{cat}{name}{ref} — LATEST {str(latest['taken_at'])[:10]}: "
+                f"{fmt_val(latest)} ({status_by_id.get(tid, '')})")
+
+        # Only worth the tokens when the lab's unit actually differs from the
+        # canonical one — otherwise "reported as" restates the same number.
+        if reported_units:
+            differing = {(str(p["unit"]), p["value"]) for p in points
+                         if p["unit"] and p["unit"] != unit and p["value"] is not None}
+            if differing:
+                units_seen = sorted({u for u, _ in differing})
+                head += f"  (lab reported in {', '.join(units_seen)}; converted to {unit})"
+
+        if n > 1:
+            line = head + f"\n    full history oldest→newest{span}: " + "; ".join(
+                f"{str(p['taken_at'])[:10]}: {fmt_val(p)}" for p in points)
+        else:
+            line = head + "  (only one reading — no trend yet)"
+        lines.append(line)
+        by_id[tid] = line
+
+    return lines, by_id
+
+
 @app.post("/api/test-types/{tt_id}/describe")
 def describe_test_type(tt_id: int, request: Request, member_id: Optional[int] = None, force_refresh: bool = False):
     """Return a clinical reference description. If member_id is provided,
@@ -454,71 +574,38 @@ def describe_test_type(tt_id: int, request: Request, member_id: Optional[int] = 
                 sex = member["sex"] or "Not specified"
                 age_str = f"{age} years old" if age is not None else "Age not specified"
                 
-                # Fetch member's historical results for this biomarker
-                history_rows = conn.execute(
-                    """SELECT value, unit, value_canonical, value_text, flag, taken_at 
-                       FROM results 
-                       WHERE member_id = ? AND test_type_id = ? 
-                       ORDER BY taken_at DESC""",
-                    (member_id, tt_id)
-                ).fetchall()
-                
-                history_list = []
-                for hr in history_rows:
-                    if hr["value_canonical"] is not None:
-                        orig_val = f"{hr['value']} {hr['unit']}"
-                        canon_val = f"{round(hr['value_canonical'], 3)} {row['canonical_unit'] or ''}"
-                        flag_str = f" (Flagged: {hr['flag']})" if hr['flag'] else ""
-                        history_list.append(f"- {hr['taken_at']}: {canon_val}{flag_str} (reported as {orig_val})")
-                    else:
-                        flag_str = f" (Flagged: {hr['flag']})" if hr['flag'] else ""
-                        history_list.append(f"- {hr['taken_at']}: {hr['value_text'] or hr['value']}{flag_str}")
-                
-                history_str = "\n".join(history_list) if history_list else "No results on file"
-
-                # Fetch other test types in the same category
-                related_rows = conn.execute(
-                    """SELECT id, name, canonical_unit 
-                       FROM test_types 
-                       WHERE category = ? AND id != ?""",
-                    (row["category"], tt_id)
-                ).fetchall()
-                
-                # Fetch historical readings for all related test types
-                related_readings = []
-                for rr in related_rows:
-                    rel_history = conn.execute(
-                        """SELECT value_canonical, value_text, flag, taken_at 
-                           FROM results 
-                           WHERE member_id = ? AND test_type_id = ? 
-                           ORDER BY taken_at DESC""",
-                        (member_id, rr["id"])
+                # Every marker in this panel, including the one being described.
+                # One query builds all of it — the main test's history and the
+                # rest of the panel's — instead of a SELECT per related marker.
+                related_ids = [
+                    r["id"] for r in conn.execute(
+                        "SELECT id FROM test_types WHERE category = ? AND id != ?",
+                        (row["category"], tt_id)
                     ).fetchall()
-                    if rel_history:
-                        h_lines = []
-                        for rh in rel_history:
-                            if rh['value_canonical'] is not None:
-                                val_str = f"{round(rh['value_canonical'], 3)} {rr['canonical_unit'] or ''}"
-                            else:
-                                # NB: `value` is not in this SELECT — referencing it
-                                # raised IndexError on any row with neither a
-                                # canonical value nor text.
-                                val_str = str(rh['value_text'] or '—')
-                            flag_str = f" ({rh['flag']})" if rh['flag'] else ""
-                            h_lines.append(f"  * {rh['taken_at']}: {val_str}{flag_str}")
-                        related_readings.append(f"- {rr['name']}:\n" + "\n".join(h_lines))
-                    else:
-                        related_readings.append(f"- {rr['name']}: No readings on file")
-                
-                related_readings_str = "\n".join(related_readings) if related_readings else "none"
+                ]
+                _, by_id = _marker_history_lines(
+                    conn, member_id, [tt_id] + related_ids,
+                    include_category=False, reported_units=True,
+                )
+
+                history_str = by_id.get(tt_id, "No results on file")
+                related_lines = [by_id[i] for i in related_ids if i in by_id]
+                # Markers in the panel with nothing on file are worth one line
+                # between them: absence is context, but not 28 lines of it.
+                missing = len(related_ids) - len(related_lines)
+                related_readings_str = "\n".join(related_lines) if related_lines else "none"
+                if missing:
+                    related_readings_str += f"\n({missing} other marker(s) in this panel have no readings on file.)"
 
                 # Deliberately no name: the provider needs age/sex to interpret a
                 # value, but never who the person is. Keep identifiers local.
                 member_context = (
                     f"Write this clinical reference guide specifically for the patient:\n"
                     f"Age: {age_str}, Sex: {sex}.\n\n"
-                    f"Patient's Historical Results for {row['name']} (Main Test):\n{history_str}\n\n"
-                    f"Patient's Historical Results for Related Tests in the same panel ({row['category']}):\n{related_readings_str}\n"
+                    f"MAIN TEST — {row['name']}. The LATEST reading is the patient's "
+                    f"current state; the history behind it is the trajectory:\n{history_str}\n\n"
+                    f"REST OF THE {(row['category'] or 'panel').upper()} PANEL, same format — "
+                    f"read these together with the main test, they move as a system:\n{related_readings_str}\n"
                 )
 
         if member_id is not None and member_context:
@@ -532,7 +619,13 @@ def describe_test_type(tt_id: int, request: Request, member_id: Optional[int] = 
                 f"2. **high**: Ramifications of a high level.\n"
                 f"3. **low**: Ramifications of a low level.\n"
                 f"4. **age_related**: Note any relevant observations or normal shifts for a {age_str} patient.\n"
-                f"5. **related_tests**: Summarize and interpret the patient's historical trends for this biomarker, noting any changes over time. Interpret how these trends track and integrate with the historical results for the related tests in the same panel (listed below). Explain what the combined clinical picture and trajectory means in plain language:\n{related_readings_str}"
+                # The panel data is already in member_context above; repeating it
+                # here doubled the largest part of the prompt for no new signal.
+                f"5. **related_tests**: Interpret this biomarker's trend — separate the "
+                f"short-term move (last 1-3 readings) from the long-run direction across "
+                f"the whole span. Then read it against the rest of the panel above: say "
+                f"which related markers corroborate the picture, which cut against it, "
+                f"and what the combined trajectory means in plain language."
             )
 
             try:
@@ -1591,81 +1684,17 @@ def _analysis_inputs(conn, member_id: int):
     only, per the privacy rule.
     """
     member = conn.execute("SELECT * FROM members WHERE id = ?", (member_id,)).fetchone()
-    summary = _summary_for(conn, member_id)
-    # Every raw result, so the model sees the real trend, not just the latest.
-    rows = conn.execute(
-        """SELECT r.test_type_id, r.taken_at, r.value_canonical, r.value_text, r.flag,
-                  r.qualifier, t.name, t.canonical_unit, t.category
-           FROM results r JOIN test_types t ON t.id = r.test_type_id
-           WHERE r.member_id = ? ORDER BY t.category, t.name, r.taken_at""",
-        (member_id,),
-    ).fetchall()
-    if not rows:
+    # Same formatter the per-biomarker guide uses, so the two AI features can
+    # never describe the same reading in two different shapes.
+    lines, by_id = _marker_history_lines(conn, member_id, None, include_category=True)
+    if not lines:
         return None, None, None
-
-    hist = {}
-    for r in rows:
-        hist.setdefault(r["test_type_id"], []).append(r)
-
-    # In/out status per marker uses the same resolved range the UI shows.
-    status_by_id = {}
-    for s in summary:
-        v = s["latest"]["value_canonical"] if s.get("latest") else None
-        lo, hi = s.get("ref_low"), s.get("ref_high")
-        if v is None:
-            status_by_id[s["test_type_id"]] = "text/qualitative"
-        elif (lo is not None and v < lo) or (hi is not None and v > hi):
-            status_by_id[s["test_type_id"]] = "OUT OF RANGE"
-        else:
-            status_by_id[s["test_type_id"]] = "in range"
-    ref_by_id = {s["test_type_id"]: (s.get("ref_low"), s.get("ref_high")) for s in summary}
-
-    lines = []
-    for tid, points in hist.items():
-        name = points[0]["name"]
-        unit = points[0]["canonical_unit"] or ""
-        cat = points[0]["category"] or "Other"
-        lo, hi = ref_by_id.get(tid, (None, None))
-        ref = ""
-        if lo is not None and hi is not None:
-            ref = f" (normal {lo}–{hi} {unit})"
-        elif hi is not None:
-            ref = f" (normal < {hi} {unit})"
-        elif lo is not None:
-            ref = f" (normal > {lo} {unit})"
-        def fmt_val(p):
-            if p["value_canonical"] is not None:
-                v = f"{round(p['value_canonical'], 3)}"
-                return f"{p['qualifier']}{v}" if p["qualifier"] else v
-            return p["value_text"] or "—"
-
-        # Points are oldest→newest. Mark the latest explicitly and note the span
-        # so the model can separate the recent turn from the long-run trajectory.
-        series = [f"{str(p['taken_at'])[:10]}: {fmt_val(p)}" for p in points]
-        latest = points[-1]
-        status = status_by_id.get(tid, "")
-        n = len(points)
-        span = ""
-        if n > 1:
-            try:
-                from datetime import date as _date
-                d0 = _date.fromisoformat(str(points[0]["taken_at"])[:10])
-                d1 = _date.fromisoformat(str(latest["taken_at"])[:10])
-                yrs = (d1 - d0).days / 365.25
-                span = f" [{n} readings over {yrs:.1f}y]" if yrs >= 0.15 else f" [{n} readings]"
-            except ValueError:
-                span = f" [{n} readings]"
-        head = f"[{cat}] {name}{ref} — LATEST {str(latest['taken_at'])[:10]}: {fmt_val(latest)} ({status})"
-        if n > 1:
-            lines.append(head + f"\n    full history oldest→newest{span}: " + "; ".join(series))
-        else:
-            lines.append(head + "  (only one reading — no trend yet)")
 
     age = age_at(member["dob"]) if member and member["dob"] else None
     sex = (member["sex"] if member else None) or "not specified"
     age_str = f"{age} years old" if age is not None else "age not specified"
     body = (
-        f"Patient: {age_str}, sex {sex}. {len(hist)} biomarkers tracked.\n\n"
+        f"Patient: {age_str}, sex {sex}. {len(by_id)} biomarkers tracked.\n\n"
         "Complete lab history. For each marker the LATEST reading (the current "
         "state) is marked first, then the full history oldest→newest so you can "
         "read short-term vs long-term trend:\n\n"
@@ -1675,7 +1704,7 @@ def _analysis_inputs(conn, member_id: int):
     # stale merely because two code paths hashed the same rows in a different
     # order.
     h, _ = _results_fingerprint(conn, member_id)
-    return body, h, len(hist)
+    return body, h, len(by_id)
 
 
 def _results_fingerprint(conn, member_id: int):
