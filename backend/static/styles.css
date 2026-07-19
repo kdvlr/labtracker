@@ -866,9 +866,17 @@ textarea { resize: vertical; }
 /* trend chips — one per horizon (recent / long-term), color by direction */
 .trend-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .trend-chip { font-size: 12.5px; font-weight: 600; padding: 3px 10px; border-radius: var(--radius-pill); border: 1px solid var(--border); white-space: nowrap; }
-.trend-chip.trend-good { color: var(--good); background: var(--good-soft); border-color: color-mix(in srgb, var(--good) 25%, transparent); }
-.trend-chip.trend-warn { color: var(--low); background: var(--low-soft); border-color: color-mix(in srgb, var(--low) 30%, transparent); }
-.trend-chip.trend-flat { color: var(--muted); background: var(--panel-2); }
+/* These chips sit inside severity-tinted cards: an urgent card is --high-soft
+   and a monitor card is --low-soft. A chip tinted with the same soft colour
+   scored 1.00 contrast against the card behind it — the same hue on itself, so
+   a red "worsening" chip simply dissolved into a red card. Sitting the chip on
+   solid --panel instead separates it from any card tint and raises the text
+   contrast at the same time (light mode 5.1->6.0, dark 6.3->8.2), and the
+   full-strength border keeps the edge crisp (~5:1 against a matching card). */
+.trend-chip.trend-good { color: var(--good); background: var(--panel); border-color: var(--good); }
+.trend-chip.trend-warn { color: var(--low);  background: var(--panel); border-color: var(--low); }
+.trend-chip.trend-bad  { color: var(--high); background: var(--panel); border-color: var(--high); }
+.trend-chip.trend-flat { color: var(--muted); background: var(--panel); border-color: var(--border); }
 .trend-note { margin: 10px 0 0; font-size: 14px; line-height: 1.5; color: var(--text-secondary); }
 
 .trend-list { display: flex; flex-direction: column; gap: 12px; }
