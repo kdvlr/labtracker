@@ -25,6 +25,12 @@
   --high-soft: #faeae8;
   --low: #8a5713;
   --low-soft: #fbf0dc;
+  /* Text laid on a solid --good/--low/--high fill. The status palette flips
+     between themes — dark, saturated hues in light mode; pale pastels in dark —
+     so the ink has to flip with it. White on the dark hues reads 4.8-6.4:1;
+     white on the pastels would be 1.7-2.0:1, which is why this is a variable
+     and not just "#fff". */
+  --chip-ink: #ffffff;
   --range-in: #2b6b47;
   --range-out: #faeae8;
   --range-warn: #fbf0dc;
@@ -68,6 +74,7 @@
     --high-soft: rgba(150, 52, 44, 0.42);
     --low: #e9c07a;
     --low-soft: rgba(120, 78, 22, 0.42);
+    --chip-ink: #10161c;   /* near-black on the pastel fills: 6.2-10.7:1 */
     --range-in: #7fd39a;
     --range-out: #7c2b25;
     --range-warn: #5c3d00;
@@ -868,15 +875,20 @@ textarea { resize: vertical; }
 .trend-chip { font-size: 12.5px; font-weight: 600; padding: 3px 10px; border-radius: var(--radius-pill); border: 1px solid var(--border); white-space: nowrap; }
 /* These chips sit inside severity-tinted cards: an urgent card is --high-soft
    and a monitor card is --low-soft. A chip tinted with the same soft colour
-   scored 1.00 contrast against the card behind it — the same hue on itself, so
-   a red "worsening" chip simply dissolved into a red card. Sitting the chip on
-   solid --panel instead separates it from any card tint and raises the text
-   contrast at the same time (light mode 5.1->6.0, dark 6.3->8.2), and the
-   full-strength border keeps the edge crisp (~5:1 against a matching card). */
-.trend-chip.trend-good { color: var(--good); background: var(--panel); border-color: var(--good); }
-.trend-chip.trend-warn { color: var(--low);  background: var(--panel); border-color: var(--low); }
-.trend-chip.trend-bad  { color: var(--high); background: var(--panel); border-color: var(--high); }
-.trend-chip.trend-flat { color: var(--muted); background: var(--panel); border-color: var(--border); }
+   measured 1.00 contrast against the card behind it — the same hue on itself —
+   so a red "worsening" chip dissolved into a red card.
+
+   Filling the pill with the full-strength hue and putting the ink on top of it
+   settles that outright: a saturated fill cannot be confused with a soft tint
+   whatever card it lands on, and the label gets more weight than an outline
+   gives it, which matters on a phone held at arm's length. --chip-ink flips per
+   theme because the palette does; see its definition. */
+.trend-chip.trend-good { background: var(--good); color: var(--chip-ink); border-color: var(--good); }
+.trend-chip.trend-warn { background: var(--low);  color: var(--chip-ink); border-color: var(--low); }
+.trend-chip.trend-bad  { background: var(--high); color: var(--chip-ink); border-color: var(--high); }
+/* "new" / "not enough history": desaturated so an absence of trend stays quiet
+   next to the coloured ones, while matching their solid shape. */
+.trend-chip.trend-flat { background: var(--muted); color: var(--chip-ink); border-color: var(--muted); }
 .trend-note { margin: 10px 0 0; font-size: 14px; line-height: 1.5; color: var(--text-secondary); }
 
 .trend-list { display: flex; flex-direction: column; gap: 12px; }
