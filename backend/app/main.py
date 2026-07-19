@@ -1707,29 +1707,59 @@ def _analysis_inputs(conn, member_id: int):
     return body, h, len(by_id)
 
 
+def _fingerprint_parts(rows) -> list:
+    """One string per result row — the values that mean 'the data changed'."""
+    return [
+        f"{r['test_type_id']}:{r['taken_at']}:{r['value_canonical']}:{r['value_text']}"
+        for r in rows
+    ]
+
+
 def _results_fingerprint(conn, member_id: int):
     """(hash, marker_count) for a member's results — the cheap half of
     _analysis_inputs. Staleness only needs to know whether the data changed, so
     this skips building the multi-KB AI prompt string that the full builder
     produces (that was being done on every overview page load just to derive a
-    boolean)."""
+    boolean).
+
+    The parts are sorted in Python, NOT by SQL, so the hash depends only on the
+    set of rows and never on the order they came back in. That matters twice
+    over: `ORDER BY test_type_id, taken_at` is not a total order — this member
+    has results sharing a marker and a date but holding different values, so
+    tied rows could hash either way — and a previous version ordered by
+    category/name instead, which silently changed every hash. Sorting here means
+    no index, query plan, or future reordering can ever fake a data change.
+    """
     import hashlib
 
     rows = conn.execute(
         """SELECT test_type_id, taken_at, value_canonical, value_text
-           FROM results WHERE member_id = ?
-           ORDER BY test_type_id, taken_at""",
+           FROM results WHERE member_id = ?""",
         (member_id,),
     ).fetchall()
     if not rows:
         return None, 0
-    h = hashlib.sha256(
-        "|".join(
-            f"{r['test_type_id']}:{r['taken_at']}:{r['value_canonical']}:{r['value_text']}"
-            for r in rows
-        ).encode()
-    ).hexdigest()
+    h = hashlib.sha256("|".join(sorted(_fingerprint_parts(rows))).encode()).hexdigest()
     return h, len({r["test_type_id"] for r in rows})
+
+
+def _legacy_results_fingerprint(conn, member_id: int):
+    """The pre-c4c5d93 hash: same per-row expression, but rows in category/name
+    order and unsorted. Recomputing it lets a stored hash from that era be
+    recognised as 'same data, old scheme' instead of being reported to the user
+    as new results that were never added."""
+    import hashlib
+
+    rows = conn.execute(
+        """SELECT r.test_type_id, r.taken_at, r.value_canonical, r.value_text
+           FROM results r JOIN test_types t ON t.id = r.test_type_id
+           WHERE r.member_id = ?
+           ORDER BY t.category, t.name, r.taken_at""",
+        (member_id,),
+    ).fetchall()
+    if not rows:
+        return None
+    return hashlib.sha256("|".join(_fingerprint_parts(rows)).encode()).hexdigest()
 
 
 def _stored_analysis(conn, member_id: int):
@@ -1796,10 +1826,35 @@ def get_member_analysis(member_id: int, request: Request):
             return {"analysis": None, "generated_at": None, "stale": False,
                     "has_data": n_markers > 0, "marker_count": n_markers}
         cur_hash, marker_count = _results_fingerprint(conn, member_id)
+        stored_hash = stored["results_hash"]
+
+        # "New results have been added" is a factual claim shown to the user, so
+        # only make it when the data really did change. Two cases where the
+        # hashes differ but nothing was added:
+        #
+        #  - the hash was stored under the older category/name-ordered scheme.
+        #    If recomputing that scheme reproduces it, the rows are provably
+        #    identical; upgrade the stored hash in place so the check is cheap
+        #    from then on, and no AI call is spent re-generating.
+        #  - the hash predates the column existing at all (NULL). We cannot
+        #    tell either way, and asserting a change we cannot show is worse
+        #    than staying quiet — Regenerate is always available.
+        stale = cur_hash is not None and cur_hash != stored_hash
+        if stale and stored_hash:
+            if stored_hash == _legacy_results_fingerprint(conn, member_id):
+                conn.execute(
+                    "UPDATE member_analyses SET results_hash = ? WHERE member_id = ?",
+                    (cur_hash, member_id),
+                )
+                conn.commit()
+                stale = False
+        elif stale and not stored_hash:
+            stale = False
+
         return {
             "analysis": stored["analysis"],
             "generated_at": stored["generated_at"],
-            "stale": cur_hash is not None and cur_hash != stored["results_hash"],
+            "stale": stale,
             "has_data": True,
             "marker_count": marker_count,
         }
