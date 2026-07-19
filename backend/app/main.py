@@ -172,7 +172,6 @@ def _test_types(conn) -> list:
 
 class PinReq(BaseModel):
     pin: str
-    scope: Optional[str] = "member"
 
 
 class SetPinReq(BaseModel):
@@ -212,7 +211,7 @@ def unlock(req: PinReq, request: Request):
             access.throttle_fail(client)
             raise HTTPException(401, "Incorrect PIN")
         access.throttle_reset(client)
-        return access.create_session(conn, scope=req.scope or "member")
+        return access.create_session(conn)
     finally:
         conn.close()
 

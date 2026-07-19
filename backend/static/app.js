@@ -631,10 +631,14 @@ const SEVERITY = {
   monitor: { cls: "sev-monitor", label: "Monitor", icon: "🟡" },
   minor: { cls: "sev-minor", label: "Minor", icon: "⚪" },
 };
+// Direction carries the clinical weight, so it gets the clinical palette:
+// red = getting worse, yellow = holding, green = getting better. "new" and
+// "not enough history" stay neutral grey — they are an absence of a trend, not
+// a steady one, and colouring them yellow would overstate what we know.
 const TREND = {
-  worsening: { cls: "warn", arrow: "↘", label: "worsening" },
+  worsening: { cls: "bad", arrow: "↘", label: "worsening" },
   improving: { cls: "good", arrow: "↗", label: "improving" },
-  stable: { cls: "flat", arrow: "→", label: "stable" },
+  stable: { cls: "warn", arrow: "→", label: "stable" },
   new: { cls: "flat", arrow: "•", label: "new" },
   insufficient: { cls: "flat", arrow: "·", label: "not enough history" },
 };
