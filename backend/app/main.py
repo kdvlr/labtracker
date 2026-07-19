@@ -855,7 +855,7 @@ async def upload_document(
                 continue
             ref_low = to_number(r.get("ref_low"))
             ref_high = to_number(r.get("ref_high"))
-            tt = match_test_type(name, types)
+            tt = match_test_type(name, types, is_qualitative=is_qual)
             canonical = None
             if tt and not is_qual:
                 canonical = to_canonical(value, unit, tt["canonical_unit"], tt["conversions"])
@@ -915,7 +915,8 @@ async def upload_document(
             except ValueError:
                 page_num = 1
                 
-            tt = match_test_type(name, types)
+            tt = match_test_type(name, types,
+                                 is_qualitative=(value is None and value_text is not None))
             canonical = None
             if tt and value is not None:
                 canonical = to_canonical(value, unit, tt["canonical_unit"], tt["conversions"])
@@ -1123,7 +1124,7 @@ def extract_document(doc_id: int, req: ExtractReq, request: Request):
                 continue
             ref_low = to_number(r.get("ref_low"))
             ref_high = to_number(r.get("ref_high"))
-            tt = match_test_type(name, types)
+            tt = match_test_type(name, types, is_qualitative=is_qual)
             canonical = None
             if tt and not is_qual:
                 canonical = to_canonical(value, unit, tt["canonical_unit"], tt["conversions"])
@@ -1179,7 +1180,8 @@ def extract_document(doc_id: int, req: ExtractReq, request: Request):
             except ValueError:
                 page_num = 1
                 
-            tt = match_test_type(name, types)
+            tt = match_test_type(name, types,
+                                 is_qualitative=(value is None and value_text is not None))
             canonical = None
             if tt and value is not None:
                 canonical = to_canonical(value, unit, tt["canonical_unit"], tt["conversions"])
@@ -1353,6 +1355,13 @@ def commit_results(req: CommitReq, request: Request):
                     (req.member_id, it.test_type_id, req.taken_at),
                 ).fetchall()
                 is_dup = any((e["value_text"] or "").strip().lower() == text.lower() for e in existing)
+                if not is_dup:
+                    # Same within-commit blind spot as the numeric branch below.
+                    is_dup = any(
+                        p[0].test_type_id == it.test_type_id
+                        and (p[6] or "").strip().lower() == text.lower()
+                        for p in prepared
+                    )
                 if is_dup:
                     duplicates.append({"name": tt["name"], "date": req.taken_at, "value": text, "unit": ""})
                     if req.ignore_duplicates:
@@ -1397,6 +1406,16 @@ def commit_results(req: CommitReq, request: Request):
                 (req.member_id, it.test_type_id, req.taken_at),
             ).fetchall()
             is_dup = any(_same_value(e["value_canonical"], canonical) for e in existing)
+            # ...and against rows earlier in *this* commit. The query above only
+            # sees what is already saved, so a report that prints the same
+            # analyte twice (a summary page and a detail page both listing
+            # "ALBUMIN 4.4 g/dL") cleared the check on both rows and inserted
+            # both. File-level dedup cannot help here — it is one file.
+            if not is_dup:
+                is_dup = any(
+                    p[0].test_type_id == it.test_type_id and _same_value(p[1], canonical)
+                    for p in prepared
+                )
             if is_dup:
                 duplicates.append({
                     "name": tt["name"], "date": req.taken_at,
