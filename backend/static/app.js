@@ -53,8 +53,6 @@ window.addEventListener("popstate", async (e) => {
   isPopStateNavigation = true;
   try {
     const targetState = e.state;
-    const currentMemberId = state.activeMember;
-    const currentPrivate = isViewPrivate(state.view, currentMemberId);
     const targetPrivate = isViewPrivate(targetState.view, targetState.activeMember);
 
     if (state.access.has_pin && !state.access.unlocked && targetPrivate) {
@@ -65,13 +63,10 @@ window.addEventListener("popstate", async (e) => {
       return;
     }
 
-    if (state.access.unlocked && currentPrivate && !targetPrivate) {
-      api("/lock", { method: "POST", token: getUnlockToken() }).catch(() => {});
-      setUnlockToken(null);
-      state.access.unlocked = false;
-      await loadCore();
-    }
-
+    // No auto-lock on navigation: an unlock lasts until the Lock button is used
+    // (or the session expires). Locking on every private→public move destroyed
+    // the session within seconds of unlocking, and fired inconsistently because
+    // it keyed off a stale activeMember.
     Object.assign(state, targetState);
     render();
   } finally {
@@ -132,19 +127,11 @@ function navigateTo(view, extras = {}) {
     return;
   }
 
-  // If we are currently unlocked, and navigating away to a public view, automatically lock!
-  const currentMemberId = state.activeMember;
-  const currentPrivate = isViewPrivate(state.view, currentMemberId);
-  if (state.access.unlocked && currentPrivate && !targetPrivate) {
-    api("/lock", { method: "POST", token: getUnlockToken() }).catch(() => {});
-    setUnlockToken(null);
-    state.access.unlocked = false;
-    loadCore().then(() => {
-      performNavigation(view, extras);
-    });
-    return;
-  }
-
+  // Deliberately no auto-lock here. An unlock lasts until the user taps Lock
+  // (or the session expires). The previous private→public auto-lock tore down
+  // the session seconds after unlocking — and fired unpredictably, because it
+  // keyed off whichever member happened to still be active rather than the view
+  // actually being left.
   performNavigation(view, extras);
 }
 
