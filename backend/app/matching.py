@@ -15,14 +15,31 @@ _STOP = {
     "measured", "calc", "calculated", "estimated", "fasting",
 }
 
-# Tokens that mark a *derived / composite / negated* analyte. Their presence means
-# the row is a distinct test that must never be folded into a single-analyte
-# catalog type — only an exact name/alias match is allowed for these.
-_DISQUALIFY = {"non", "ratio", "index", "vldl"}
+# Tokens that mark a *derived / composite / negated / different* analyte. Their
+# presence means the row is a distinct test that must never be folded into a
+# single-analyte catalog type — only an exact name/alias match is allowed.
+#
+# "nucleated" earns its place the same way "non" did: NUCLEATED RED BLOOD CELLS
+# is a different analyte from RED BLOOD CELLS, but "blood" is a stop word, so its
+# signature {nucleated, red, cells} contains the catalog's {red, cells} and the
+# token-subset rule merged the two.
+_DISQUALIFY = {"non", "ratio", "index", "vldl", "nucleated"}
+
+# A percent variant measures something different from its absolute counterpart
+# ("Neutrophils %" vs "Neutrophils - Absolute Count"), but the "%" is punctuation
+# and used to vanish during tokenization — so a lab's "X %" and "X" row looked
+# identical and could collapse onto one another. Fold the spellings together into
+# one significant token instead of dropping it.
+_PERCENT = {"percent", "percentage", "pct"}
 
 
 def _tokens(s: str) -> list:
-    return [t for t in re.split(r"[^a-z0-9]+", (s or "").lower()) if t]
+    s = (s or "").lower().replace("%", " percent ")
+    return [
+        "percent" if t in _PERCENT else t
+        for t in re.split(r"[^a-z0-9]+", s)
+        if t
+    ]
 
 
 def _norm(s: str) -> str:
@@ -41,22 +58,49 @@ def _exact_match(target: str, test_types: list) -> Optional[dict]:
     return None
 
 
-def match_test_type(name: str, test_types: list) -> Optional[dict]:
-    """test_types is a list of dicts with keys name, slug, aliases (list)."""
+def _incompatible(tt: dict, is_qualitative: bool) -> bool:
+    """True when a qualitative row cannot be this (numeric) catalog test.
+
+    Labs print the same bare label in different panels: a Quest report carries
+    "GLUCOSE  91 mg/dL" in the chemistry panel and "GLUCOSE  NEGATIVE" in the
+    urinalysis section pages later. The names are byte-identical, so no amount of
+    name cleverness separates them — but a dipstick "NEGATIVE" with no unit
+    plainly is not a mg/dL fasting blood glucose, and folding it in puts a
+    qualitative row into a numeric trend line.
+
+    So: a text result never merges into a test type that is measured in a unit.
+    This deliberately over-rejects (a urine RBC reported as "Nil" will track on
+    its own rather than joining a cells/HPF series). That is the trade this
+    module already makes everywhere else — an unrecognised test tracked
+    separately is visible and fixable, a wrong merge silently corrupts a series.
+    """
+    return is_qualitative and bool((tt.get("canonical_unit") or "").strip())
+
+
+def match_test_type(name: str, test_types: list,
+                    is_qualitative: bool = False) -> Optional[dict]:
+    """test_types is a list of dicts with keys name, slug, aliases (list).
+
+    is_qualitative marks a row whose result is text ("NEGATIVE", "Nil") rather
+    than a number; such a row will not be merged into a unit-bearing test type.
+    """
     target = _norm(name)
     if not target:
         return None
+
+    def ok(t):
+        return None if (t is None or _incompatible(t, is_qualitative)) else t
 
     raw = _tokens(name)
     # Composite/derived rows ("TC/HDL RATIO", "NON-HDL", "VLDL", "APO B / APO A1
     # RATIO") only merge on an *exact* name/alias hit — never by fuzzy containment.
     if "/" in (name or "") or any(t in _DISQUALIFY for t in raw):
-        return _exact_match(target, test_types)
+        return ok(_exact_match(target, test_types))
 
     # 1) exact normalized name or alias
     hit = _exact_match(target, test_types)
     if hit:
-        return hit
+        return ok(hit)
 
     # 2) token-subset containment among simple (non-derived) names. One side's
     #    significant tokens must fully contain the other's — this lets a short lab
@@ -90,4 +134,4 @@ def match_test_type(name: str, test_types: list) -> Optional[dict]:
     # aligned tokens there. Anything weaker tracks as its own test instead.
     if best is not None and best_overlap < 2:
         return None
-    return best
+    return ok(best)

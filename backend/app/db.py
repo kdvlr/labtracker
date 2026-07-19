@@ -201,7 +201,10 @@ def _migrate_document_lifecycle(conn) -> None:
                             
                         ref_low = to_number(r.get("ref_low"))
                         ref_high = to_number(r.get("ref_high"))
-                        tt = match_test_type(name, test_types_list)
+                        tt = match_test_type(
+                            name, test_types_list,
+                            is_qualitative=(value is None and value_text is not None),
+                        )
                         tt_id = tt["id"] if tt else None
                         
                         conn.execute(
