@@ -119,7 +119,7 @@ def auto_import_items(conn, doc_id: int) -> dict:
     Returns counts for the summary the review page shows.
     """
     doc = conn.execute(
-        "SELECT member_id, report_date FROM documents WHERE id = ?", (doc_id,)
+        "SELECT member_id, report_date, extraction FROM documents WHERE id = ?", (doc_id,)
     ).fetchone()
     out = {"imported": 0, "duplicates": 0, "needs_review": 0}
     if not doc:
@@ -147,6 +147,22 @@ def auto_import_items(conn, doc_id: int) -> dict:
         conn.execute(
             "UPDATE document_items SET error_reason = ? WHERE id = ?", (reason, item_id)
         )
+
+    if doc["extraction"] and member:
+        try:
+            extraction = json.loads(doc["extraction"])
+            p_name = extraction.get("patient_name") or ""
+            m_name = member["name"] or ""
+            if p_name and m_name:
+                p_clean = "".join(c for c in p_name.lower() if c.isalnum())
+                m_clean = "".join(c for c in m_name.lower() if c.isalnum())
+                if p_clean and m_clean and p_clean not in m_clean and m_clean not in p_clean:
+                    reason = f"Name mismatch: report says '{p_name}', profile is '{m_name}'"
+                    for it in pending:
+                        hold(it["id"], reason)
+                    return out
+        except Exception:
+            pass
 
     # Values taken in this pass, so a report listing the same analyte twice does
     # not import it twice — the saved-results query below cannot see them yet.
