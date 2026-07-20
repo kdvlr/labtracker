@@ -78,6 +78,12 @@ def init_db() -> None:
             conn.execute("ALTER TABLE documents ADD COLUMN extraction TEXT")
         if "file_hash" not in dcols:
             conn.execute("ALTER TABLE documents ADD COLUMN file_hash TEXT")
+        icols = {r["name"] for r in conn.execute("PRAGMA table_info(document_items)")}
+        if "auto_imported" not in icols:
+            # Default 0: every row that predates auto-import was decided by a
+            # human, which is exactly what 0 means.
+            conn.execute("ALTER TABLE document_items ADD COLUMN auto_imported INTEGER NOT NULL DEFAULT 0")
+            conn.commit()
         conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_member ON documents(member_id)")
 
         n = conn.execute("SELECT COUNT(*) FROM test_types").fetchone()[0]

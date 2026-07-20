@@ -90,6 +90,165 @@ def _require_doc(conn, request: Request, doc_id: int):
     _require_member(conn, request, row["member_id"])
 
 
+def auto_import_items(conn, doc_id: int) -> dict:
+    """Decide the rows a human would only ever rubber-stamp, and leave the rest.
+
+    Reviewing every row of a 100-row report is not review — past a certain
+    volume the only usable action is "save all", which approves the ambiguous
+    rows along with the obvious ones. That is strictly worse than importing the
+    obvious ones automatically and putting a short, genuinely uncertain list in
+    front of a person.
+
+    A row is taken automatically only when nothing is left to judge:
+      - the extracted name matched a catalog test. match_test_type is already
+        conservative and returns nothing when a name is ambiguous, so a match
+        is a real signal rather than a guess;
+      - the value converts to that test's canonical unit (or the row is
+        qualitative, which by then can only have matched a unit-less test);
+      - no result for the same test and date already holds a different value.
+
+    Everything else stays needs_review, and each of those carries the reason:
+    unmatched names, unconvertible or missing units, and same-date conflicts —
+    which are precisely the rows where a human adds something.
+
+    An exact same-date, same-value match is skipped rather than imported: the
+    report is being re-read, not re-measured. Duplicates default to skipped, as
+    everywhere else in this app.
+
+    Returns counts for the summary the review page shows.
+    """
+    doc = conn.execute(
+        "SELECT member_id, report_date FROM documents WHERE id = ?", (doc_id,)
+    ).fetchone()
+    out = {"imported": 0, "duplicates": 0, "needs_review": 0}
+    if not doc:
+        return out
+
+    pending = conn.execute(
+        "SELECT * FROM document_items WHERE document_id = ? AND status = 'needs_review'",
+        (doc_id,),
+    ).fetchall()
+    out["needs_review"] = len(pending)
+
+    # Without knowing who the report belongs to or when it was taken there is
+    # nothing to import into. Both are review decisions in their own right.
+    taken_at = (doc["report_date"] or "").strip()
+    if not doc["member_id"] or not taken_at:
+        return out
+
+    member_id = doc["member_id"]
+    types = {t["id"]: t for t in _test_types(conn)}
+    member = conn.execute("SELECT * FROM members WHERE id = ?", (member_id,)).fetchone()
+    m_sex = member["sex"] if member else None
+    m_age = age_at(member["dob"], taken_at) if member else None
+
+    def hold(item_id, reason):
+        conn.execute(
+            "UPDATE document_items SET error_reason = ? WHERE id = ?", (reason, item_id)
+        )
+
+    # Values taken in this pass, so a report listing the same analyte twice does
+    # not import it twice — the saved-results query below cannot see them yet.
+    taken_here = {}
+
+    for it in pending:
+        tt = types.get(it["test_type_id"]) if it["test_type_id"] else None
+        if not tt:
+            hold(it["id"], "New or unrecognised test — confirm what it should be filed under")
+            continue
+
+        qualitative = it["raw_value"] is None and it["raw_value_text"] is not None
+        canonical, text, qualifier, flag = None, None, None, None
+
+        if qualitative:
+            text = (it["raw_value_text"] or "").strip()
+            flag = it["raw_flag"] if it["raw_flag"] in ("H", "L") else None
+        else:
+            if it["raw_value"] is None:
+                hold(it["id"], "No value reported")
+                continue
+            canonical = to_canonical(
+                it["raw_value"], it["raw_unit"], tt["canonical_unit"], tt["conversions"]
+            )
+            if canonical is None:
+                reason = (
+                    f"No unit reported (expected {tt['canonical_unit']}) — set the unit to import"
+                    if not (it["raw_unit"] or "").strip()
+                    else f"Unit '{it['raw_unit']}' can't convert to {tt['canonical_unit'] or 'its unit'}"
+                )
+                hold(it["id"], reason)
+                continue
+            qualifier = it["raw_qualifier"] if it["raw_qualifier"] in ("<", ">") else None
+            rlow_c = (to_canonical(it["raw_ref_low"], it["raw_unit"], tt["canonical_unit"], tt["conversions"])
+                      if it["raw_ref_low"] is not None else None)
+            rhigh_c = (to_canonical(it["raw_ref_high"], it["raw_unit"], tt["canonical_unit"], tt["conversions"])
+                       if it["raw_ref_high"] is not None else None)
+            if rlow_c is not None or rhigh_c is not None:
+                eff_low, eff_high = rlow_c, rhigh_c
+            else:
+                eff_low, eff_high = resolve_range(tt["slug"], tt["ref_low"], tt["ref_high"], m_sex, m_age)
+            flag = compute_flag(canonical, eff_low, eff_high, qualifier)
+
+        existing = conn.execute(
+            """SELECT value_canonical, value_text FROM results
+               WHERE member_id = ? AND test_type_id = ? AND taken_at = ?""",
+            (member_id, it["test_type_id"], taken_at),
+        ).fetchall()
+        prior = [(e["value_canonical"], e["value_text"]) for e in existing]
+        prior += taken_here.get(it["test_type_id"], [])
+
+        if prior:
+            if qualitative:
+                same = any((pt or "").strip().lower() == text.lower() for _, pt in prior)
+            else:
+                same = any(_same_value(pv, canonical) for pv, _ in prior)
+            if same:
+                conn.execute(
+                    """UPDATE document_items
+                       SET status = 'skipped', error_reason = ?, auto_imported = 1
+                       WHERE id = ?""",
+                    ("Already on file for this date", it["id"]),
+                )
+                out["duplicates"] += 1
+                out["needs_review"] -= 1
+                continue
+            # Same test and date, a different value. Which one is right is a
+            # judgement about the report, so it goes to a person.
+            hold(it["id"], "A different value for this test is already on file for this date")
+            continue
+
+        if not qualitative:
+            rlow, rhigh = it["raw_ref_low"], it["raw_ref_high"]
+            rlow_c_v, rhigh_c_v = rlow_c, rhigh_c
+        else:
+            rlow, rhigh, rlow_c_v, rhigh_c_v = None, None, None, None
+
+        cur = conn.execute(
+            """INSERT INTO results
+               (member_id, test_type_id, document_id, taken_at, value, unit, value_canonical,
+                value_text, ref_low, ref_high, ref_low_canonical, ref_high_canonical,
+                flag, qualifier, note)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)""",
+            (
+                member_id, it["test_type_id"], doc_id, taken_at,
+                it["raw_value"], it["raw_unit"] or "", canonical, text,
+                rlow, rhigh, rlow_c_v, rhigh_c_v, flag, qualifier,
+            ),
+        )
+        conn.execute(
+            """UPDATE document_items
+               SET status = 'imported', result_id = ?, error_reason = NULL, auto_imported = 1
+               WHERE id = ?""",
+            (cur.lastrowid, it["id"]),
+        )
+        taken_here.setdefault(it["test_type_id"], []).append((canonical, text))
+        out["imported"] += 1
+        out["needs_review"] -= 1
+
+    conn.commit()
+    return out
+
+
 def recompute_doc_status(conn, doc_id: int) -> str:
     """Derive a document's status from the outcome of its extracted rows.
 
@@ -936,6 +1095,13 @@ async def upload_document(
         extraction_res["document_id"] = doc_id
         conn.execute("UPDATE documents SET extraction = ? WHERE id = ?", (json.dumps(extraction_res), doc_id))
         conn.commit()
+
+        # Take the unambiguous rows now; leave a person only what needs judging.
+        auto = auto_import_items(conn, doc_id)
+        extraction_res["auto"] = auto
+        conn.execute("UPDATE documents SET extraction = ?, status = ? WHERE id = ?",
+                     (json.dumps(extraction_res), recompute_doc_status(conn, doc_id), doc_id))
+        conn.commit()
         
         row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
         return dict(row)
@@ -1205,6 +1371,12 @@ def extract_document(doc_id: int, req: ExtractReq, request: Request):
             (report_date, parsed.get("lab_name"), json.dumps(response), doc_id),
         )
         conn.commit()
+
+        auto = auto_import_items(conn, doc_id)
+        response["auto"] = auto
+        conn.execute("UPDATE documents SET extraction = ?, status = ? WHERE id = ?",
+                     (json.dumps(response), recompute_doc_status(conn, doc_id), doc_id))
+        conn.commit()
         return response
     finally:
         conn.close()
@@ -1252,7 +1424,8 @@ def get_extraction(doc_id: int, request: Request):
                 "unit_known": match_ok,
                 "status": it["status"],
                 "error_reason": it["error_reason"],
-                "result_id": it["result_id"]
+                "result_id": it["result_id"],
+                "auto_imported": bool(it["auto_imported"]),
             })
             
         # Try to parse provider, model, and error from extraction fallback
@@ -1268,8 +1441,17 @@ def get_extraction(doc_id: int, request: Request):
             except Exception:
                 pass
                 
+        # Counts for the "handled automatically" summary, so the page can lead
+        # with what still needs a person rather than the full list.
+        auto_summary = {
+            "imported": sum(1 for i in item_list if i["auto_imported"] and i["status"] == "imported"),
+            "duplicates": sum(1 for i in item_list if i["auto_imported"] and i["status"] == "skipped"),
+            "needs_review": sum(1 for i in item_list if i["status"] == "needs_review"),
+        }
+
         return {
             "document_id": doc_id,
+            "auto": auto_summary,
             "report_date": doc["report_date"],
             "lab_name": doc["lab_name"],
             "patient_name": doc.get("patient_name") or (json.loads(doc["extraction"]).get("patient_name") if doc["extraction"] else None),
