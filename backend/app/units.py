@@ -118,11 +118,33 @@ def to_canonical(value, unit: str, canonical_unit: str, conversions: dict) -> Op
     if nu == nc:
         return num
     spec = find_conversion(conversions, unit)
-    if spec is None:
-        return None
-    factor = spec.get("factor", 1)
-    offset = spec.get("offset", 0)
-    return num * factor + offset
+    if spec is not None:
+        factor = spec.get("factor", 1)
+        offset = spec.get("offset", 0)
+        return num * factor + offset
+
+    # Fallback rules for common lab units, OCR errors, and scaling factors
+    # 1. OCR Typos (MCH: pg/pq)
+    if (nu == "pq" and nc == "pg") or (nu == "pg" and nc == "pq"):
+        return num
+
+    # 2. RBC count units (millions/cumm vs 10^6/uL)
+    rbc_units = {"millions/cumm", "million/cumm", "x10^6/ul", "10^6/ul", "x106/ul", "106/ul", "x10^6/cumm"}
+    if nu in rbc_units and nc in rbc_units:
+        return num
+
+    # 3. WBC/Platelet count units (Thousands/uL vs cells/cumm)
+    thousands_units = {
+        "x10^3/ul", "10^3/ul", "x10³/ul", "10³/ul", "x103/ul", "103/ul", 
+        "thousands/cumm", "thousand/cumm", "thousand/ul", "thousands/ul"
+    }
+    absolute_units = {"cells/cumm", "cell/cumm", "/cumm", "/ul", "cells/ul", "cell/ul"}
+    if nu in thousands_units and nc in absolute_units:
+        return num * 1000.0
+    if nu in absolute_units and nc in thousands_units:
+        return num / 1000.0
+
+    return None
 
 
 def known_units(canonical_unit: str, conversions: dict) -> list:
