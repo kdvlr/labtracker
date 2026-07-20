@@ -7,6 +7,7 @@ import uuid
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -1138,7 +1139,14 @@ def list_documents(
             SELECT d.id, d.member_id, d.filename, d.stored_name, d.mime, d.size,
                    d.report_date, d.lab_name, d.note, d.status, d.created_at,
                    m.name AS member_name,
-                   (SELECT COUNT(*) FROM results r WHERE r.document_id = d.id) AS result_count
+                   (SELECT COUNT(*) FROM results r WHERE r.document_id = d.id) AS result_count,
+                   -- Surfaced on the card so the list answers "what still needs
+                   -- me?" without opening every report.
+                   (SELECT COUNT(*) FROM document_items di
+                     WHERE di.document_id = d.id AND di.status = 'needs_review') AS needs_review_count,
+                   (SELECT COUNT(*) FROM document_items di
+                     WHERE di.document_id = d.id AND di.auto_imported = 1
+                       AND di.status = 'imported') AS auto_imported_count
             FROM documents d
             LEFT JOIN members m ON m.id = d.member_id
             WHERE (d.member_id IS NULL OR d.member_id IN ({}))
@@ -1242,7 +1250,35 @@ def get_document_file(doc_id: int, request: Request):
         path = FILES_DIR / row["stored_name"]
         if not path.exists():
             raise HTTPException(404, "File missing")
-        return FileResponse(path, media_type=row["mime"], filename=row["filename"])
+
+        # Passing filename= to FileResponse sets Content-Disposition: attachment,
+        # which forces a download and leaves the user cleaning up a Downloads
+        # folder just to glance at a report. Serve inline so it opens in a tab
+        # and the browser disposes of it on its own.
+        #
+        # Only for formats that cannot carry script, though. These are
+        # user-uploaded files served from the app's own origin, so rendering,
+        # say, an HTML or SVG upload inline would run its script with access to
+        # this session. Those keep the download behaviour.
+        mime = (row["mime"] or "").lower()
+        inline_ok = mime == "application/pdf" or (
+            mime.startswith("image/") and "svg" not in mime
+        )
+        # RFC 5987: the plain filename stays ASCII-safe for old clients, the
+        # filename* carries the real one.
+        name = row["filename"] or "report"
+        ascii_name = name.encode("ascii", "replace").decode("ascii").replace('"', "'")
+        disposition = "inline" if inline_ok else "attachment"
+        return FileResponse(
+            path,
+            media_type=row["mime"],
+            headers={
+                "Content-Disposition": (
+                    f"{disposition}; filename=\"{ascii_name}\"; "
+                    f"filename*=UTF-8''{quote(name)}"
+                )
+            },
+        )
     finally:
         conn.close()
 
