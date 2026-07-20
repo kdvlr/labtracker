@@ -2798,7 +2798,7 @@ async function renderDocuments(main) {
         const autoN = d.auto_imported_count || 0;
 
         const uploadDateStr = fmtDate(d.created_at);
-        const countBits = [el("span", { class: "doc-card-count" }, `Uploaded Date: ${uploadDateStr} : ${d.result_count || 0} results uploaded`)];
+        const countBits = [el("span", { class: "doc-card-count" }, `Uploaded on: ${uploadDateStr} : ${d.result_count || 0} results uploaded`)];
         if (autoN) countBits.push(el("span", { class: "doc-stat" }, `${autoN} auto-imported`));
         if (needs) countBits.push(el("span", { class: "doc-stat doc-stat-attn" }, `${needs} need${needs === 1 ? "s" : ""} review`));
 
@@ -2826,7 +2826,7 @@ async function renderDocuments(main) {
                 el("span", {}, d.lab_name || "Unknown Lab")
               ]),
               el("div", { class: "doc-card-meta-item" }, [
-                el("span", { style: "font-weight: 500; color: var(--text-secondary);" }, "Test Date:"),
+                el("span", { style: "font-weight: 500; color: var(--text-secondary);" }, "Tested on:"),
                 el("span", {}, fmtDate(d.report_date || d.created_at))
               ])
             ]),
