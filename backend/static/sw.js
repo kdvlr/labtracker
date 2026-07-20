@@ -1,9 +1,9 @@
-const CACHE_NAME = "labtracker-v31";
+const CACHE_NAME = "labtracker-v32";
 const ASSETS = [
   "/",
   "/index.html",
-  "/styles.css?v=36",
-  "/app.js?v=48",
+  "/styles.css?v=37",
+  "/app.js?v=49",
   "/icon.svg",
   "/icon-maskable.svg",
   "/manifest.json"

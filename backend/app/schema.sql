@@ -100,7 +100,12 @@ CREATE TABLE IF NOT EXISTS document_items (
     test_type_id INTEGER REFERENCES test_types(id) ON DELETE SET NULL,
     status TEXT NOT NULL DEFAULT 'needs_review', -- needs_review | imported | skipped | errored
     error_reason TEXT,
-    result_id INTEGER REFERENCES results(id) ON DELETE SET NULL
+    result_id INTEGER REFERENCES results(id) ON DELETE SET NULL,
+    -- 1 = the importer decided this row on its own (imported it, or skipped it
+    -- as an exact duplicate) without a human looking. Kept distinct from a
+    -- human's decision so the review page can say what went in unseen, and so
+    -- those rows stay findable afterwards.
+    auto_imported INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_document_items_doc ON document_items(document_id);

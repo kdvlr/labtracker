@@ -2168,7 +2168,14 @@ function createCollapsible(title, count, contentEl, defaultOpen = false) {
     contentEl.style.display = isVisible ? "none" : "block";
     arrow.textContent = isVisible ? "▶" : "▼";
   };
-  
+
+  // Let a caller open the section directly — the "Show them" link in the
+  // auto-import summary needs this and shouldn't have to synthesise a click.
+  wrapper.expand = () => {
+    contentEl.style.display = "block";
+    arrow.textContent = "▼";
+  };
+
   return wrapper;
 }
 
@@ -2389,12 +2396,36 @@ function renderReview(mount, doc, memberId, result, main, errorMsg, isLegacy) {
   const colImported = createCollapsible("Successfully imported results", importedItems.length, importedContent, false);
   const colSkipped = createCollapsible("Skipped or failed items", skippedItems.length, skippedContent, false);
 
-  mount.append(el("div", { class: "card", style: "padding: 16px; margin-bottom: 16px;" }, [
-    el("h3", { style: "margin-top:0" }, "Review extracted results"),
+  // What the importer already settled, so the page can lead with the short list
+  // that actually needs a person instead of the whole report.
+  const auto = result.auto || {};
+  const autoDone = (auto.imported || 0) + (auto.duplicates || 0);
+  const autoParts = [];
+  if (auto.imported) autoParts.push(`${auto.imported} imported`);
+  if (auto.duplicates) autoParts.push(`${auto.duplicates} already on file, skipped`);
+
+  const headerKids = [
+    el("h3", { style: "margin-top:0" }, needsReviewItems.length ? "A few results need you" : "Review extracted results"),
     el("p", { class: "page-sub", style: "margin-bottom:6px" }, `From ${result.lab_name || doc.filename}${result.patient_name ? " · patient: " + result.patient_name : ""} · extracted by ${result.provider}/${result.model}`),
-    el("p", { class: "page-sub", style: "margin:0 0 14px" }, "Every test is tracked by default. Use a row's dropdown to merge it into an existing test (so units line up on one chart) or skip it."),
+  ];
+  if (autoDone) {
+    headerKids.push(el("div", { class: "auto-summary" }, [
+      el("span", { class: "auto-summary-check" }, "✓"),
+      el("span", {}, `${autoParts.join(" · ")} automatically — nothing to decide on ${autoDone === 1 ? "that one" : "those"}.`),
+      el("button", {
+        class: "linkish",
+        onclick: () => { colImported.expand(); colImported.scrollIntoView({ behavior: "smooth", block: "start" }); },
+      }, "Show them"),
+    ]));
+  }
+  headerKids.push(
+    el("p", { class: "page-sub", style: "margin:10px 0 14px" },
+      needsReviewItems.length
+        ? "These are the rows the importer would not decide on its own — a new test it hasn't seen, a missing unit, or a value that clashes with one already on file."
+        : "Every test is tracked by default. Use a row's dropdown to merge it into an existing test (so units line up on one chart) or skip it."),
     el("div", { class: "field", style: "max-width:220px; margin: 0;" }, [el("label", {}, "Collection date"), dateInput]),
-  ]));
+  );
+  mount.append(el("div", { class: "card", style: "padding: 16px; margin-bottom: 16px;" }, headerKids));
   
   mount.append(colNeedsReview, colImported, colSkipped);
 }

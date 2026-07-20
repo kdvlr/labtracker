@@ -885,6 +885,16 @@ textarea { resize: vertical; }
 .problem-actions li { margin-bottom: 5px; font-size: 15px; line-height: 1.5; }
 
 /* trend chips — one per horizon (recent / long-term), color by direction */
+/* Auto-import summary on the review page: reassurance, not an alarm. Uses the
+   calm accent rather than the status palette — green/amber/red are reserved for
+   clinical status, and "12 rows imported" is not a clinical finding. */
+.auto-summary { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 10px 0 0; padding: 10px 12px; border-radius: var(--radius-sm);
+  background: var(--accent-soft); border: 1px solid var(--border);
+  font-size: 14px; color: var(--text-secondary); line-height: 1.45; }
+.auto-summary-check { font-weight: 700; color: var(--accent); }
+.auto-summary .linkish { margin-left: auto; white-space: nowrap; }
+
 .trend-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .trend-chip { font-size: 12.5px; font-weight: 600; padding: 3px 10px; border-radius: var(--radius-pill); border: 1px solid var(--border); white-space: nowrap; }
 /* These chips sit inside severity-tinted cards: an urgent card is --high-soft
