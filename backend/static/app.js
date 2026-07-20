@@ -1780,6 +1780,14 @@ function renderUpload(main) {
 
   const memberSel = el("select");
   for (const m of state.members) memberSel.append(el("option", { value: m.id, ...(m.id === state.activeMember ? { selected: "" } : {}) }, m.name));
+  memberSel.addEventListener("change", () => {
+    const summarySpan = document.getElementById("summary-member-name");
+    if (summarySpan) {
+      const mid = Number(memberSel.value);
+      const m = state.members.find(x => x.id === mid);
+      summarySpan.textContent = m ? m.name : "Unknown Profile";
+    }
+  });
 
   let selectedFiles = [];
 
@@ -1932,21 +1940,22 @@ function renderUpload(main) {
             }
           }
           let result;
-          if (doc.extraction) {
+          if (doc.status !== "uploaded") {
             try {
-              result = JSON.parse(doc.extraction);
+              result = await api(`/documents/${doc.id}/extraction`);
             } catch (err) {
-              console.error("Failed parsing cached extraction:", err);
+              console.error("Failed fetching live extraction:", err);
             }
           }
           if (result && !result.error) {
             status.innerHTML = "";
-            renderReview(reviewMount, doc, Number(memberSel.value), result);
+            renderReview(reviewMount, doc, () => Number(memberSel.value), result);
           } else {
             status.innerHTML = ""; status.append(el("span", {}, [el("span", { class: "spinner" }), " Extracting with AI… this can take ~20s"]));
-            result = await api(`/documents/${doc.id}/extract`, { method: "POST", body: {} });
+            await api(`/documents/${doc.id}/extract`, { method: "POST", body: {} });
+            result = await api(`/documents/${doc.id}/extraction`);
             status.innerHTML = "";
-            renderReview(reviewMount, doc, Number(memberSel.value), result);
+            renderReview(reviewMount, doc, () => Number(memberSel.value), result);
           }
         } catch (e) {
           status.innerHTML = ""; status.append(el("div", { class: "warn" }, "Error: " + e.message));
@@ -2192,7 +2201,8 @@ function renderReview(mount, doc, memberId, result, main, errorMsg, isLegacy) {
         bannerStatus.innerHTML = ""; 
         bannerStatus.append(el("span", {}, [el("span", { class: "spinner" }), " Extracting with AI… this can take ~20s"]));
         try {
-          const newResult = await api(`/documents/${doc.id}/extract`, { method: "POST", body: {} });
+          await api(`/documents/${doc.id}/extract`, { method: "POST", body: {} });
+          const newResult = await api(`/documents/${doc.id}/extraction`);
           toast("Extraction complete!");
           // Re-render the review page with the fresh extraction results
           renderReview(mount, doc, memberId, newResult, main);
@@ -2219,7 +2229,7 @@ function renderReview(mount, doc, memberId, result, main, errorMsg, isLegacy) {
     mount.append(errorCard);
   }
   
-  const dateInput = el("input", { type: "date", value: (result.report_date || "").slice(0, 10) || new Date().toISOString().slice(0, 10) });
+  const reportDate = (result.report_date || "").slice(0, 10) || new Date().toISOString().slice(0, 10);
   
   // Categorize items
   const needsReviewItems = result.items.filter(it => it.status === "needs_review" || !it.status);
@@ -2336,7 +2346,7 @@ function renderReview(mount, doc, memberId, result, main, errorMsg, isLegacy) {
         const mid = typeof memberId === "function" ? memberId() : memberId;
         if (!mid) { toast("Choose a family member first"); commitBtn.disabled = false; commitBtn.textContent = original; return; }
         const res = await commitResults({
-          member_id: mid, taken_at: dateInput.value, document_id: doc.id, items,
+          member_id: mid, taken_at: reportDate, document_id: doc.id, items,
         });
         if (res.cancelled) { toast("Cancelled — nothing saved"); commitBtn.disabled = false; commitBtn.textContent = original; return; }
         const nSkip = (res.skipped || []).length;
@@ -2419,13 +2429,43 @@ function renderReview(mount, doc, memberId, result, main, errorMsg, isLegacy) {
     ]));
   }
   headerKids.push(
-    el("p", { class: "page-sub", style: "margin:10px 0 14px" },
+    el("p", { class: "page-sub", style: "margin: 10px 0 0 0;" },
       needsReviewItems.length
         ? "These are the rows the importer would not decide on its own — a new test it hasn't seen, a missing unit, or a value that clashes with one already on file."
-        : "Every test is tracked by default. Use a row's dropdown to merge it into an existing test (so units line up on one chart) or skip it."),
-    el("div", { class: "field", style: "max-width:220px; margin: 0;" }, [el("label", {}, "Collection date"), dateInput]),
+        : "Every test is tracked by default. Use a row's dropdown to merge it into an existing test (so units line up on one chart) or skip it.")
   );
   mount.append(el("div", { class: "card", style: "padding: 16px; margin-bottom: 16px;" }, headerKids));
+
+  // Summary Section
+  const mid = typeof memberId === "function" ? memberId() : memberId;
+  const member = state.members.find(m => m.id === mid);
+  const memberName = member ? member.name : "Unknown Profile";
+
+  const profileSpan = el("strong", { id: "summary-member-name" }, memberName);
+
+  const summaryCard = el("div", { class: "summary-card" }, [
+    el("div", {}, [
+      el("div", { class: "summary-label" }, "Detected Patient Name"),
+      el("div", { class: "summary-val" }, result.patient_name || "Unknown")
+    ]),
+    el("div", {}, [
+      el("div", { class: "summary-label" }, "Lab"),
+      el("div", { class: "summary-val" }, result.lab_name || "Unknown")
+    ]),
+    el("div", {}, [
+      el("div", { class: "summary-label" }, "Collection Date"),
+      el("div", { class: "summary-val" }, fmtDate(result.report_date))
+    ]),
+    el("div", {}, [
+      el("div", { class: "summary-label" }, "Destination Profile"),
+      el("div", { class: "summary-val" }, [
+        "Importing into ",
+        profileSpan,
+        "'s profile"
+      ])
+    ])
+  ]);
+  mount.append(summaryCard);
   
   mount.append(colNeedsReview, colImported, colSkipped);
 }
@@ -2890,6 +2930,14 @@ async function renderReviewDoc(main) {
   for (const m of state.members) {
     memberSel.append(el("option", { value: m.id, ...(m.id === (doc.member_id || state.activeMember) ? { selected: "" } : {}) }, m.name));
   }
+  memberSel.addEventListener("change", () => {
+    const summarySpan = document.getElementById("summary-member-name");
+    if (summarySpan) {
+      const mid = Number(memberSel.value);
+      const m = state.members.find(x => x.id === mid);
+      summarySpan.textContent = m ? m.name : "Unknown Profile";
+    }
+  });
   
   const reassignBtn = el("button", { 
     class: "btn btn-sm btn-primary", 
