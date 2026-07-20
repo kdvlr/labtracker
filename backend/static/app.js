@@ -2790,7 +2790,29 @@ async function renderDocuments(main) {
           "reviewed": "pill-grey"
         }[d.status] || "pill-amber";
         
-        const card = el("div", { class: "doc-timeline-card", onclick: () => openReview(d) }, [
+        // Everything the card can answer, it answers here. The row used to be a
+        // link into a detail page, so seeing a lab name or removing a stray
+        // upload meant a round trip; now the counts and the actions live on the
+        // card and the click-through is gone.
+        const needs = d.needs_review_count || 0;
+        const autoN = d.auto_imported_count || 0;
+
+        const countBits = [el("span", { class: "doc-card-count" }, `${d.result_count || 0} results`)];
+        if (autoN) countBits.push(el("span", { class: "doc-stat" }, `${autoN} auto-imported`));
+        if (needs) countBits.push(el("span", { class: "doc-stat doc-stat-attn" }, `${needs} need${needs === 1 ? "s" : ""} review`));
+
+        const docActions = [
+          // Opens in its own tab instead of downloading, so reading a report
+          // doesn't leave a file to clean up afterwards.
+          el("a", { class: "btn btn-sm", href: `/api/documents/${d.id}/file`,
+                    target: "_blank", rel: "noopener" }, "Open PDF"),
+          el("button", { class: "btn btn-sm", onclick: () => openReview(d) },
+             needs ? `Review ${needs}` : "Results"),
+          el("button", { class: "btn btn-sm", onclick: () => openReassignDoc(d) }, "Reassign"),
+          el("button", { class: "btn btn-sm btn-danger", onclick: () => deleteImport(d) }, "Delete"),
+        ];
+
+        const card = el("div", { class: "doc-timeline-card" }, [
           el("div", { class: "doc-card-info" }, [
             el("div", { class: "doc-card-title" }, d.filename),
             el("div", { class: "doc-card-meta" }, [
@@ -2806,10 +2828,11 @@ async function renderDocuments(main) {
                 el("span", {}, "📅"),
                 el("span", {}, fmtDate(d.report_date || d.created_at))
               ])
-            ])
+            ]),
+            el("div", { class: "doc-card-stats" }, countBits),
+            el("div", { class: "doc-card-buttons" }, docActions),
           ]),
           el("div", { class: "doc-card-actions" }, [
-            el("span", { class: "doc-card-count" }, `${d.result_count || 0} results`),
             el("span", { class: "pill " + pillClass }, statusTextMap[d.status] || d.status)
           ])
         ]);

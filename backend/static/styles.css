@@ -1102,25 +1102,22 @@ textarea { resize: vertical; }
   flex-direction: column;
   gap: 12px;
 }
+/* No longer a link into a detail page — the card carries its own actions, so it
+   drops the pointer cursor and the lift-on-hover that promised a click-through.
+   Aligns to the top now that the body is several rows tall. */
 .doc-timeline-card {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 14px 16px;
-  cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   gap: 16px;
 }
 .doc-timeline-card:hover {
-  transform: translateY(-1px);
   box-shadow: var(--shadow-sm);
-  border-color: var(--accent);
-}
-.doc-timeline-card:active {
-  transform: scale(0.995);
 }
 .doc-card-info {
   flex: 1;
@@ -1156,6 +1153,32 @@ textarea { resize: vertical; }
   font-size: 13px;
   color: var(--muted);
   font-weight: 500;
+}
+.doc-card-stats {
+  display: flex; align-items: center; flex-wrap: wrap;
+  gap: 6px 10px; margin-top: 8px;
+}
+.doc-stat { font-size: 13px; color: var(--muted); font-weight: 500; }
+.doc-stat::before { content: "·"; margin-right: 10px; color: var(--baseline); }
+/* The one stat that is a call to action. Amber, not red: rows awaiting review
+   are the normal state of a fresh upload, not an error. */
+.doc-stat-attn { color: var(--low); font-weight: 600; }
+.doc-card-buttons {
+  display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px;
+}
+/* Full-width targets on a phone — these sit under a 70-year-old's thumb. */
+@media (max-width: 640px) {
+  .doc-timeline-card { flex-direction: column; align-items: stretch; }
+  .doc-card-buttons .btn { flex: 1 1 auto; min-width: 44%; justify-content: center; }
+  /* Stacking puts the status pill last, trailing after Delete where it reads as
+     an afterthought. Pull it to the top — status is the first thing you want
+     from a report, not the last. */
+  /* An earlier mobile rule styled this as a trailing footer (border-top +
+     padding). It leads now, so that divider would float above the pill. */
+  .doc-card-actions {
+    order: -1; justify-content: flex-start;
+    border-top: none; padding-top: 0; width: auto;
+  }
 }
 
 .document-actions-card {
