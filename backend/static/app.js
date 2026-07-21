@@ -24,7 +24,7 @@ function isViewPrivate(view, activeMemberId) {
 function getHashForState(s) {
   if (s.view === "household") return "#/household";
   if (s.view === "overview") return `#/overview?member=${s.activeMember}`;
-  if (s.view === "detail") return `#/detail?member=${s.activeMember}&test_type=${s._detail?.id}`;
+  if (s.view === "detail") return `#/detail?member=${s.activeMember}&test_type=${s._detail?.testTypeId}`;
   if (s.view === "upload") return `#/upload?member=${s.activeMember}`;
   if (s.view === "documents") return "#/documents";
   if (s.view === "review-doc") return `#/review-doc?doc=${s._reviewDoc?.id}`;
@@ -48,38 +48,8 @@ function getStateSnapshot() {
 
 let isPopStateNavigation = false;
 
-window.addEventListener("popstate", async (e) => {
-  if (!e.state) return;
-  isPopStateNavigation = true;
-  try {
-    const targetState = e.state;
-    const targetPrivate = isViewPrivate(targetState.view, targetState.activeMember);
-
-    if (state.access.has_pin && !state.access.unlocked && targetPrivate) {
-      openUnlockModal(
-        async () => { Object.assign(state, targetState); render(); },
-        () => { history.back(); }
-      );
-      return;
-    }
-
-    // No auto-lock on navigation: an unlock lasts until the Lock button is used
-    // (or the session expires). Locking on every private→public move destroyed
-    // the session within seconds of unlocking, and fired inconsistently because
-    // it keyed off a stale activeMember.
-    Object.assign(state, targetState);
-    render();
-  } finally {
-    isPopStateNavigation = false;
-  }
-});
-
-function handleInitialHash() {
-  const hash = window.location.hash;
-  if (!hash) {
-    history.replaceState(getStateSnapshot(), "", "#/household");
-    return;
-  }
+function parseHash(hash) {
+  if (!hash) return { view: "household", extras: {} };
   
   const parts = hash.split("?");
   const route = parts[0];
@@ -94,7 +64,8 @@ function handleInitialHash() {
     extras.activeMember = parseInt(params.get("member")) || null;
     const ttId = parseInt(params.get("test_type"));
     if (ttId) {
-      extras._detail = state.testTypes.find(t => t.id === ttId) || null;
+      const member = state.members.find(m => m.id === extras.activeMember) || null;
+      extras._detail = { member, testTypeId: ttId };
     }
   } else if (view === "upload") {
     extras.activeMember = parseInt(params.get("member")) || null;
@@ -104,6 +75,73 @@ function handleInitialHash() {
   } else if (view === "report") {
     const memberId = parseInt(params.get("member"));
     extras._report = { member: state.members.find(m => m.id === memberId) || null };
+  }
+  
+  return { view, extras };
+}
+
+window.addEventListener("popstate", async (e) => {
+  let targetState = e.state;
+  const hash = window.location.hash;
+  
+  if (!targetState) {
+    const { view, extras } = parseHash(hash);
+    targetState = { view, activeMember: extras.activeMember, ...extras };
+  }
+  
+  isPopStateNavigation = true;
+  try {
+    const targetPrivate = isViewPrivate(targetState.view, targetState.activeMember);
+
+    if (state.access.has_pin && !state.access.unlocked && targetPrivate) {
+      openUnlockModal(
+        async () => { Object.assign(state, targetState); render(); },
+        () => {
+          if (e.state) {
+            history.back();
+          } else {
+            state.view = "household";
+            history.replaceState(getStateSnapshot(), "", "#/household");
+            render();
+          }
+        }
+      );
+      return;
+    }
+
+    Object.assign(state, targetState);
+    render();
+  } finally {
+    isPopStateNavigation = false;
+  }
+});
+
+function handleInitialHash() {
+  const hash = window.location.hash;
+  if (!hash) {
+    history.replaceState(getStateSnapshot(), "", "#/household");
+    return;
+  }
+  
+  const { view, extras } = parseHash(hash);
+  const targetMemberId = extras.activeMember !== undefined ? extras.activeMember : state.activeMember;
+  const targetPrivate = isViewPrivate(view, targetMemberId);
+  
+  if (state.access.has_pin && !state.access.unlocked && targetPrivate) {
+    openUnlockModal(
+      async () => {
+        state.view = view;
+        Object.assign(state, extras);
+        history.replaceState(getStateSnapshot(), "", hash);
+        render();
+      },
+      () => {
+        state.view = "household";
+        history.replaceState(getStateSnapshot(), "", "#/household");
+        render();
+      }
+    );
+    return;
   }
   
   state.view = view;

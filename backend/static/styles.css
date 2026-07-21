@@ -471,7 +471,12 @@ textarea { resize: vertical; }
 
 /* ---------- ask ---------- */
 .ask-answer { white-space: pre-wrap; line-height: 1.7; background: var(--page); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 18px 20px; margin-top: 16px; font-size: 16px; }
-.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 6px; }
+.chips {
+  display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 6px;
+  max-height: 160px; overflow-y: auto;
+  border: 1px solid var(--border); padding: 8px; border-radius: var(--radius-sm);
+  background: var(--panel-2);
+}
 .chip { font-family: var(--sans-display); font-weight: 500; padding: 7px 16px; border-radius: var(--radius-pill); border: 1px solid var(--baseline); background: var(--panel); font-size: 15px; cursor: pointer; transition: all 0.2s cubic-bezier(0.2, 0.8, 0.2, 1); }
 .chip:hover { border-color: var(--accent); background: rgba(0, 90, 69, 0.04); }
 .chip:active { transform: scale(0.97); }
@@ -604,8 +609,8 @@ textarea { resize: vertical; }
   }
   .page-title { font-size: 27px; }
   .page-head { gap: 14px; }
-  .head-actions { width: 100%; }
-  .head-actions .btn { flex: 1; justify-content: center; }
+  .head-actions { width: 100%; flex-wrap: wrap; gap: 8px; }
+  .head-actions .btn { flex: 1 1 auto; justify-content: center; min-width: 120px; }
 
   /* One column, roomier rows — nothing to hunt for or pinch at. */
   .household-grid, .tests-grid { grid-template-columns: 1fr; }
