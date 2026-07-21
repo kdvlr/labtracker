@@ -262,6 +262,8 @@ def auto_import_items(conn, doc_id: int) -> dict:
         out["imported"] += 1
         out["needs_review"] -= 1
 
+    if out["imported"] > 0:
+        conn.execute("DELETE FROM member_analyses WHERE member_id = ?", (member_id,))
     conn.commit()
     return out
 
@@ -1220,10 +1222,15 @@ def reassign_document(doc_id: int, req: ReassignReq, request: Request):
             raise HTTPException(404, "Document not found")
         if not conn.execute("SELECT 1 FROM members WHERE id = ?", (req.member_id,)).fetchone():
             raise HTTPException(404, "Member not found")
+        old_doc = conn.execute("SELECT member_id FROM documents WHERE id = ?", (doc_id,)).fetchone()
+        old_member_id = old_doc["member_id"] if old_doc else None
+
         moved = conn.execute(
             "UPDATE results SET member_id = ? WHERE document_id = ?", (req.member_id, doc_id)
         ).rowcount
         conn.execute("UPDATE documents SET member_id = ? WHERE id = ?", (req.member_id, doc_id))
+        if old_member_id:
+            conn.execute("DELETE FROM member_analyses WHERE member_id IN (?, ?)", (old_member_id, req.member_id))
         conn.commit()
         return {"ok": True, "moved": moved}
     finally:
@@ -1242,6 +1249,8 @@ def delete_document(doc_id: int, request: Request):
             raise HTTPException(404, "Document not found")
         deleted = conn.execute("DELETE FROM results WHERE document_id = ?", (doc_id,)).rowcount
         conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
+        if doc["member_id"]:
+            conn.execute("DELETE FROM member_analyses WHERE member_id = ?", (doc["member_id"],))
         conn.commit()
         # Remove the stored file too (best-effort; DB state is the source of truth).
         try:
@@ -1709,6 +1718,9 @@ def commit_results(req: CommitReq, request: Request):
                 (req.member_id, req.document_id),
             )
             recompute_doc_status(conn, req.document_id)
+
+        if created > 0:
+            conn.execute("DELETE FROM member_analyses WHERE member_id = ?", (req.member_id,))
 
         conn.commit()
         return {"created": created, "skipped": skipped, "duplicates": duplicates}
