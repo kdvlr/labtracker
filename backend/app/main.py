@@ -1158,13 +1158,11 @@ def list_documents(
                    d.report_date, d.lab_name, d.note, d.status, d.created_at,
                    m.name AS member_name,
                    (SELECT COUNT(*) FROM results r WHERE r.document_id = d.id) AS result_count,
-                   -- Surfaced on the card so the list answers "what still needs
-                   -- me?" without opening every report.
-                   (SELECT COUNT(*) FROM document_items di
-                     WHERE di.document_id = d.id AND di.status = 'needs_review') AS needs_review_count,
-                   (SELECT COUNT(*) FROM document_items di
-                     WHERE di.document_id = d.id AND di.auto_imported = 1
-                       AND di.status = 'imported') AS auto_imported_count
+                   (SELECT COUNT(*) FROM document_items di WHERE di.document_id = d.id) AS extracted_count,
+                   (SELECT COUNT(*) FROM document_items di WHERE di.document_id = d.id AND di.status = 'imported') AS imported_count,
+                   (SELECT COUNT(*) FROM document_items di WHERE di.document_id = d.id AND di.status = 'skipped' AND (di.error_reason LIKE '%Already on file%' OR di.error_reason LIKE '%duplicate%')) AS duplicate_count,
+                   (SELECT COUNT(*) FROM document_items di WHERE di.document_id = d.id AND di.status = 'needs_review') AS needs_review_count,
+                   (SELECT COUNT(*) FROM document_items di WHERE di.document_id = d.id AND di.auto_imported = 1 AND di.status = 'imported') AS auto_imported_count
             FROM documents d
             LEFT JOIN members m ON m.id = d.member_id
             WHERE (d.member_id IS NULL OR d.member_id IN ({}))
