@@ -2869,8 +2869,18 @@ async function renderDocuments(main) {
         const autoN = d.auto_imported_count || 0;
 
         const uploadDateStr = fmtDate(d.created_at);
-        const countBits = [el("span", { class: "doc-card-count" }, `Uploaded on: ${uploadDateStr} : ${d.result_count || 0} results uploaded`)];
-        if (autoN) countBits.push(el("span", { class: "doc-stat" }, `${autoN} auto-imported`));
+
+        const totalExtracted = d.extracted_count || d.result_count || 0;
+        const duplicates = d.duplicate_count || 0;
+        const imported = d.imported_count !== undefined ? d.imported_count : (d.result_count || 0);
+
+        let summaryText = `Uploaded on: ${uploadDateStr} : ${totalExtracted} results uploaded`;
+        if (totalExtracted > 0 && duplicates > 0) {
+          summaryText = `Uploaded on: ${uploadDateStr} : ${totalExtracted} results (${duplicates} duplicate${duplicates !== 1 ? "s" : ""}, ${imported} added)`;
+        }
+
+        const countBits = [el("span", { class: "doc-card-count" }, summaryText)];
+        if (autoN && !duplicates) countBits.push(el("span", { class: "doc-stat" }, `${autoN} auto-imported`));
         if (needs) countBits.push(el("span", { class: "doc-stat doc-stat-attn" }, `${needs} need${needs === 1 ? "s" : ""} review`));
 
         const docActions = [
