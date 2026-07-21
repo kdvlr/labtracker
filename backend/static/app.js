@@ -164,6 +164,17 @@ function navigateBack() {
   }
 }
 
+function openMemberHistory(memberId) {
+  state.docFilter = {
+    search: "",
+    memberId: String(memberId),
+    statusGroup: "all",
+    limit: 15,
+    offset: 0
+  };
+  performNavigation("documents", {});
+}
+
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const el = (tag, props = {}, children = []) => {
@@ -805,6 +816,7 @@ async function renderOverview(main) {
     ]),
     el("div", { class: "head-actions" }, [
       el("button", { class: "btn", onclick: () => openEditMember(member) }, "✎ Edit"),
+      el("button", { class: "btn", onclick: () => openMemberHistory(member.id) }, "📁 Reports History"),
       el("button", { class: "btn", onclick: () => { navigateTo("report", { _report: { member } }); } }, "🖨 Doctor report"),
       el("button", { class: "btn", onclick: () => { navigateTo("upload"); } }, "＋ Add results"),
       el("button", { class: "btn btn-primary", onclick: () => openAsk(member) }, "✨ Ask AI"),
@@ -1146,8 +1158,20 @@ async function renderHousehold(main) {
       ]),
     ]);
 
+    const historyBtn = el("button", {
+      class: "btn btn-sm",
+      style: "font-size: 12px; padding: 4px 10px;",
+      onclick: (e) => {
+        e.stopPropagation();
+        openMemberHistory(m.id);
+      }
+    }, "📁 Reports History");
+
     if (!summary.length) {
-      card.append(el("div", { class: "hh-empty" }, "Upload a report to start tracking."));
+      card.append(el("div", { class: "hh-empty", style: "display:flex; justify-content:space-between; align-items:center;" }, [
+        el("span", {}, "Upload a report to start tracking."),
+        historyBtn
+      ]));
       mount.append(card);
       return;
     }
@@ -1161,7 +1185,14 @@ async function renderHousehold(main) {
       pills.push(el("span", { class: "count-pill minor" }, "No concerns flagged"));
     }
 
-    card.append(el("div", { class: "hh-pills", style: "margin-bottom: 0;" }, pills));
+    const footerRow = el("div", {
+      style: "display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border);"
+    }, [
+      el("div", { class: "hh-pills", style: "margin-bottom: 0;" }, pills),
+      historyBtn
+    ]);
+
+    card.append(footerRow);
     mount.append(card);
   });
 }
