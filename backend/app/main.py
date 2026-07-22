@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -2453,7 +2453,283 @@ def ask(req: AskReq, request: Request):
             answer = ai.chat(provider, model, key, qa_sys, prompt)
         except ai.AIError as e:
             raise HTTPException(400, str(e))
+            
+        # Log to qa_logs
+        try:
+            conn.execute(
+                "INSERT INTO qa_logs (member_id, question, context, answer, provider, model) VALUES (?, ?, ?, ?, ?, ?)",
+                (req.member_id, req.question, history, answer, provider, model)
+            )
+            conn.commit()
+        except Exception as log_err:
+            print("Failed to log QA:", log_err)
+            
         return {"answer": answer, "provider": provider, "model": model, "context": history}
+    finally:
+        conn.close()
+
+
+class AddCaseReq(BaseModel):
+    name: str
+    task_type: str
+    input_id: Optional[int] = None
+    input_text: Optional[str] = None
+    ground_truth: str
+
+
+class StartRunReq(BaseModel):
+    baseline_provider: str
+    baseline_model: str
+    candidate_provider: str
+    candidate_model: str
+
+
+# --- Evaluation endpoints ---
+
+@app.get("/api/eval/cases/history")
+def get_eval_history(request: Request):
+    conn = get_db()
+    try:
+        _require_unlocked(conn, request)
+        # Fetch documents
+        docs_rows = conn.execute(
+            "SELECT id, filename, mime, report_date, extraction FROM documents ORDER BY created_at DESC"
+        ).fetchall()
+        docs = []
+        for r in docs_rows:
+            docs.append({
+                "id": r["id"],
+                "filename": r["filename"],
+                "mime": r["mime"],
+                "report_date": r["report_date"],
+                "has_extraction": bool(r["extraction"])
+            })
+            
+        # Fetch Q&A logs
+        qa_rows = conn.execute(
+            """SELECT q.id, m.name as member_name, q.question, q.context, q.answer, q.created_at
+               FROM qa_logs q JOIN members m ON q.member_id = m.id
+               ORDER BY q.created_at DESC"""
+        ).fetchall()
+        qas = []
+        for r in qa_rows:
+            qas.append({
+                "id": r["id"],
+                "member_name": r["member_name"],
+                "question": r["question"],
+                "context": r["context"][:200] + "..." if len(r["context"]) > 200 else r["context"],
+                "answer": r["answer"][:100] + "..." if len(r["answer"]) > 100 else r["answer"],
+                "created_at": r["created_at"]
+            })
+            
+        return {"documents": docs, "qas": qas}
+    finally:
+        conn.close()
+
+
+@app.get("/api/eval/cases")
+def list_eval_cases(request: Request):
+    conn = get_db()
+    try:
+        _require_unlocked(conn, request)
+        rows = conn.execute("SELECT * FROM eval_cases ORDER BY created_at DESC").fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+@app.post("/api/eval/cases")
+def add_eval_case(req: AddCaseReq, request: Request):
+    conn = get_db()
+    try:
+        _require_unlocked(conn, request)
+        
+        # Auto-resolving extraction document ground truth
+        if req.task_type == "extraction" and req.input_id and not req.ground_truth:
+            doc = conn.execute("SELECT * FROM documents WHERE id = ?", (req.input_id,)).fetchone()
+            if not doc:
+                raise HTTPException(404, "Document not found")
+                
+            results = conn.execute(
+                """SELECT r.*, tt.name as test_name FROM results r
+                   JOIN test_types tt ON r.test_type_id = tt.id
+                   WHERE r.document_id = ?""",
+                (req.input_id,)
+            ).fetchall()
+            
+            res_list = []
+            for r in results:
+                res_list.append({
+                    "test_name": r["test_name"],
+                    "value": r["value"],
+                    "value_text": r["value_text"],
+                    "unit": r["unit"],
+                    "qualifier": r["qualifier"],
+                    "ref_low": r["ref_low"],
+                    "ref_high": r["ref_high"]
+                })
+                
+            # If there are no committed results, check if raw items exist, or fallback to raw extraction JSON
+            if not res_list:
+                # Let's try raw document_items
+                items = conn.execute("SELECT * FROM document_items WHERE document_id = ?", (req.input_id,)).fetchall()
+                for item in items:
+                    res_list.append({
+                        "test_name": item["raw_name"],
+                        "value": item["raw_value"],
+                        "value_text": item["raw_value_text"],
+                        "unit": item["raw_unit"],
+                        "qualifier": item["raw_qualifier"],
+                        "ref_low": item["raw_ref_low"],
+                        "ref_high": item["raw_ref_high"]
+                    })
+                    
+            if not res_list and doc["extraction"]:
+                try:
+                    res_list = json.loads(doc["extraction"]).get("results", [])
+                except Exception:
+                    pass
+                    
+            gt_data = {
+                "report_date": doc["report_date"],
+                "lab_name": doc["lab_name"],
+                "results": res_list
+            }
+            req.ground_truth = json.dumps(gt_data)
+            
+        # Auto-resolving Q&A log details
+        if req.task_type == "qa" and req.input_id and not req.input_text:
+            log = conn.execute("SELECT * FROM qa_logs WHERE id = ?", (req.input_id,)).fetchone()
+            if not log:
+                raise HTTPException(404, "Q&A log not found")
+            req.input_text = json.dumps({
+                "question": log["question"],
+                "context": log["context"]
+            })
+            if not req.ground_truth:
+                req.ground_truth = log["answer"]
+                
+        conn.execute(
+            """INSERT INTO eval_cases (name, task_type, input_id, input_text, ground_truth)
+               VALUES (?, ?, ?, ?, ?)""",
+            (req.name, req.task_type, req.input_id, req.input_text, req.ground_truth)
+        )
+        conn.commit()
+        return {"status": "success"}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/eval/cases/{case_id}")
+def delete_eval_case(case_id: int, request: Request):
+    conn = get_db()
+    try:
+        _require_unlocked(conn, request)
+        conn.execute("DELETE FROM eval_cases WHERE id = ?", (case_id,))
+        conn.commit()
+        return {"status": "success"}
+    finally:
+        conn.close()
+
+
+@app.get("/api/eval/runs")
+def list_eval_runs(request: Request):
+    conn = get_db()
+    try:
+        _require_unlocked(conn, request)
+        rows = conn.execute("SELECT * FROM eval_runs ORDER BY created_at DESC LIMIT 50").fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+@app.post("/api/eval/runs")
+def start_eval_run(req: StartRunReq, request: Request, bg_tasks: BackgroundTasks):
+    conn = get_db()
+    try:
+        _require_unlocked(conn, request)
+        
+        # Verify there are test cases
+        n_cases = conn.execute("SELECT COUNT(*) FROM eval_cases").fetchone()[0]
+        if n_cases == 0:
+            raise HTTPException(400, "No test cases configured. Please add some test cases first.")
+            
+        cur = conn.execute(
+            """INSERT INTO eval_runs (baseline_provider, baseline_model, candidate_provider, candidate_model, status)
+               VALUES (?, ?, ?, ?, 'running')""",
+            (req.baseline_provider, req.baseline_model, req.candidate_provider, req.candidate_model)
+        )
+        run_id = cur.lastrowid
+        conn.commit()
+        
+        from .eval import run_evaluation_task
+        bg_tasks.add_task(run_evaluation_task, run_id)
+        
+        return {"run_id": run_id, "status": "running"}
+    finally:
+        conn.close()
+
+
+@app.get("/api/eval/runs/{run_id}")
+def get_eval_run_details(run_id: int, request: Request):
+    conn = get_db()
+    try:
+        _require_unlocked(conn, request)
+        run = conn.execute("SELECT * FROM eval_runs WHERE id = ?", (run_id,)).fetchone()
+        if not run:
+            raise HTTPException(404, "Run not found")
+            
+        results_rows = conn.execute(
+            """SELECT err.*, ec.name as case_name, ec.task_type, ec.ground_truth
+               FROM eval_run_results err JOIN eval_cases ec ON err.case_id = ec.id
+               WHERE err.run_id = ?""",
+            (run_id,)
+        ).fetchall()
+        
+        results = [dict(r) for r in results_rows]
+        
+        # Compute aggregate metrics
+        total_cases = len(results)
+        completed_cases = sum(1 for r in results if not r["baseline_error"] and not r["candidate_error"])
+        
+        b_avg_score = 0.0
+        c_avg_score = 0.0
+        b_total_tokens = 0
+        c_total_tokens = 0
+        b_avg_latency = 0.0
+        c_avg_latency = 0.0
+        
+        scored_cases = 0
+        for r in results:
+            if r["baseline_score"] is not None and r["candidate_score"] is not None and not r["baseline_error"] and not r["candidate_error"]:
+                b_avg_score += r["baseline_score"]
+                c_avg_score += r["candidate_score"]
+                scored_cases += 1
+                
+            b_total_tokens += (r["baseline_tokens_in"] or 0) + (r["baseline_tokens_out"] or 0)
+            c_total_tokens += (r["candidate_tokens_in"] or 0) + (r["candidate_tokens_out"] or 0)
+            b_avg_latency += r["baseline_latency_ms"] or 0
+            c_avg_latency += r["candidate_latency_ms"] or 0
+            
+        if scored_cases > 0:
+            b_avg_score /= scored_cases
+            c_avg_score /= scored_cases
+        if total_cases > 0:
+            b_avg_latency /= total_cases
+            c_avg_latency /= total_cases
+            
+        summary = {
+            "total_cases": total_cases,
+            "completed_cases": completed_cases,
+            "baseline_avg_score": round(b_avg_score, 2),
+            "candidate_avg_score": round(c_avg_score, 2),
+            "baseline_total_tokens": b_total_tokens,
+            "candidate_total_tokens": c_total_tokens,
+            "baseline_avg_latency_ms": int(b_avg_latency),
+            "candidate_avg_latency_ms": int(c_avg_latency)
+        }
+        
+        return {"run": dict(run), "summary": summary, "results": results}
     finally:
         conn.close()
 

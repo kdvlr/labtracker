@@ -116,3 +116,57 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT
 );
 
+CREATE TABLE IF NOT EXISTS qa_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    member_id INTEGER REFERENCES members(id) ON DELETE CASCADE,
+    question TEXT NOT NULL,
+    context TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS eval_cases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    task_type TEXT NOT NULL,          -- 'extraction' | 'qa' | 'health_analysis'
+    input_id INTEGER,                 -- links to documents.id (for extraction)
+    input_text TEXT,                  -- holds question + context JSON string
+    ground_truth TEXT NOT NULL,       -- expected JSON or expected response facts
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS eval_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    baseline_provider TEXT NOT NULL,
+    baseline_model TEXT NOT NULL,
+    candidate_provider TEXT NOT NULL,
+    candidate_model TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running', -- running | completed | failed
+    error_message TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS eval_run_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER REFERENCES eval_runs(id) ON DELETE CASCADE,
+    case_id INTEGER REFERENCES eval_cases(id) ON DELETE CASCADE,
+    
+    baseline_output TEXT,
+    baseline_tokens_in INTEGER,
+    baseline_tokens_out INTEGER,
+    baseline_latency_ms INTEGER,
+    baseline_score REAL,
+    baseline_error TEXT,
+    
+    candidate_output TEXT,
+    candidate_tokens_in INTEGER,
+    candidate_tokens_out INTEGER,
+    candidate_latency_ms INTEGER,
+    candidate_score REAL,
+    candidate_error TEXT,
+    
+    judge_explanation TEXT
+);
+

@@ -3370,6 +3370,452 @@ function buildCategorizationQueue(categories, onChange) {
   return wrap;
 }
 
+}
+
+async function buildModelEvaluationPanel(container) {
+  container.innerHTML = `<div style="text-align: center; padding: 24px;"><span class="spinner"></span> Loading Evaluation Suite...</div>`;
+  try {
+    const cases = await api("/eval/cases");
+    const runs = await api("/eval/runs");
+    container.innerHTML = "";
+
+    let currentTab = "runs";
+    let selectedRunId = runs.length > 0 ? runs[0].id : null;
+    let selectedRunDetails = null;
+
+    if (selectedRunId) {
+      try {
+        selectedRunDetails = await api("/eval/runs/" + selectedRunId);
+      } catch (err) {
+        console.error("Failed to load run details:", err);
+      }
+    }
+
+    const mainWrap = el("div", { style: "display: flex; flex-direction: column; gap: 16px;" });
+    const tabContainer = el("div", { style: "display: flex; gap: 8px; margin-bottom: 8px; border-bottom: 1px solid var(--border); padding-bottom: 8px;" });
+
+    const runsTabBtn = el("button", { class: "btn " + (currentTab === "runs" ? "btn-primary" : "btn-quiet"), onclick: () => switchTab("runs") }, "Runs Dashboard");
+    const datasetTabBtn = el("button", { class: "btn " + (currentTab === "dataset" ? "btn-primary" : "btn-quiet"), onclick: () => switchTab("dataset") }, "Manage Dataset");
+    tabContainer.append(runsTabBtn, datasetTabBtn);
+
+    const contentArea = el("div");
+
+    mainWrap.append(tabContainer, contentArea);
+    container.append(mainWrap);
+
+    const switchTab = (tab) => {
+      currentTab = tab;
+      runsTabBtn.className = "btn " + (currentTab === "runs" ? "btn-primary" : "btn-quiet");
+      datasetTabBtn.className = "btn " + (currentTab === "dataset" ? "btn-primary" : "btn-quiet");
+      renderTabContent();
+    };
+
+    const renderTabContent = async () => {
+      contentArea.innerHTML = "";
+      if (currentTab === "runs") {
+        contentArea.append(await buildRunsView());
+      } else {
+        contentArea.append(buildDatasetView());
+      }
+    };
+
+    const buildRunsView = async () => {
+      const runViewWrap = el("div", { style: "display: flex; flex-direction: column; gap: 16px;" });
+
+      const runTriggerCard = el("div", { class: "card", style: "background: var(--panel-2); padding: 16px; display: flex; flex-direction: column; gap: 12px;" }, [
+        el("h4", { style: "margin: 0; font-size: 16px; font-weight: 600;" }, "🚀 Start New Evaluation"),
+        el("div", { style: "display: flex; flex-wrap: wrap; gap: 16px;" }, [
+          el("div", { style: "flex: 1; min-width: 200px;" }, [
+            el("label", { style: "display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px;" }, "Baseline Model"),
+            el("div", { style: "display: flex; gap: 8px;" }, [
+              el("select", { id: "eval-b-provider", style: "flex: 1;", onchange: (e) => updateModelOpts("b", e.target.value) }, [
+                el("option", { value: "gemini" }, "Gemini"),
+                el("option", { value: "openai" }, "OpenAI"),
+                el("option", { value: "anthropic" }, "Anthropic")
+              ]),
+              el("input", { id: "eval-b-model", type: "text", value: "gemini-2.0-flash", style: "flex: 1.5;", placeholder: "model ID" })
+            ])
+          ]),
+          el("div", { style: "flex: 1; min-width: 200px;" }, [
+            el("label", { style: "display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px;" }, "Candidate Model"),
+            el("div", { style: "display: flex; gap: 8px;" }, [
+              el("select", { id: "eval-c-provider", style: "flex: 1;", onchange: (e) => updateModelOpts("c", e.target.value) }, [
+                el("option", { value: "openai" }, "OpenAI"),
+                el("option", { value: "gemini" }, "Gemini"),
+                el("option", { value: "anthropic" }, "Anthropic")
+              ]),
+              el("input", { id: "eval-c-model", type: "text", value: "gpt-4o", style: "flex: 1.5;", placeholder: "model ID" })
+            ])
+          ])
+        ]),
+        el("div", { style: "display: flex; justify-content: flex-end;" }, [
+          el("button", { class: "btn btn-primary", onclick: async (e) => {
+            const btn = e.target;
+            btn.disabled = true;
+            try {
+              const bp = document.getElementById("eval-b-provider").value;
+              const bm = document.getElementById("eval-b-model").value;
+              const cp = document.getElementById("eval-c-provider").value;
+              const cm = document.getElementById("eval-c-model").value;
+              const res = await api("/eval/runs", { method: "POST", body: { baseline_provider: bp, baseline_model: bm, candidate_provider: cp, candidate_model: cm } });
+              toast("Evaluation started!");
+              pollRunStatus(res.run_id);
+            } catch (err) {
+              toast("Failed to start run: " + err.message);
+              btn.disabled = false;
+            }
+          } }, "Start Evaluation")
+        ])
+      ]);
+
+      const updateModelOpts = (prefix, provider) => {
+        const input = document.getElementById(`eval-${prefix}-model`);
+        if (provider === "gemini") input.value = "gemini-2.0-flash";
+        if (provider === "openai") input.value = "gpt-4o";
+        if (provider === "anthropic") input.value = "claude-3-5-sonnet-latest";
+      };
+
+      const pastRunsSelect = el("select", { style: "width: 100%;", onchange: async (e) => {
+        selectedRunId = parseInt(e.target.value);
+        selectedRunDetails = await api("/eval/runs/" + selectedRunId);
+        renderTabContent();
+      } });
+      
+      runs.forEach(r => {
+        pastRunsSelect.append(el("option", { value: r.id, ...(r.id === selectedRunId ? { selected: "" } : {}) }, 
+          `Run #${r.id} (${r.created_at}) - Baseline: ${r.baseline_model} vs Candidate: ${r.candidate_model} [${r.status}]`
+        ));
+      });
+
+      const selectorContainer = el("div", { style: "display: flex; flex-direction: column; gap: 6px;" }, [
+        el("label", { style: "font-weight: 600; font-size: 13px;" }, "Select Evaluation Run to View Details:"),
+        runs.length > 0 ? pastRunsSelect : el("p", { class: "page-sub" }, "No evaluation runs recorded yet.")
+      ]);
+
+      runViewWrap.append(runTriggerCard, selectorContainer);
+
+      if (selectedRunDetails) {
+        runViewWrap.append(buildReportCard(selectedRunDetails));
+      }
+
+      return runViewWrap;
+    };
+
+    const pollRunStatus = (runId) => {
+      const pollBox = el("div", { class: "card", style: "padding: 16px; border-left: 5px solid var(--accent); margin-top: 12px; display: flex; align-items: center; gap: 12px;" }, [
+        el("span", { class: "spinner" }),
+        el("span", {}, "Evaluation run in progress... polling results.")
+      ]);
+      contentArea.prepend(pollBox);
+
+      const interval = setInterval(async () => {
+        try {
+          const data = await api("/eval/runs/" + runId);
+          if (data.run.status !== "running") {
+            clearInterval(interval);
+            selectedRunId = runId;
+            selectedRunDetails = data;
+            const updatedRuns = await api("/eval/runs");
+            runs.length = 0;
+            runs.push(...updatedRuns);
+            renderTabContent();
+          }
+        } catch (err) {
+          clearInterval(interval);
+          toast("Polling failed: " + err.message);
+        }
+      }, 3000);
+    };
+
+    const buildReportCard = (data) => {
+      const s = data.summary;
+      const r = data.run;
+      const detailsWrap = el("div", { style: "display: flex; flex-direction: column; gap: 16px; margin-top: 12px;" });
+
+      if (r.status === "failed") {
+        detailsWrap.append(el("div", { class: "warn", style: "padding:16px; background: rgba(227, 73, 72, 0.08); border-radius: var(--radius-sm);" }, [
+          el("h5", { style: "margin:0 0 8px; font-weight:700;" }, "Run Failed"),
+          el("p", { style: "margin:0; font-family:monospace; font-size:12px; white-space:pre-wrap;" }, r.error_message)
+        ]));
+        return detailsWrap;
+      }
+
+      const statGrid = el("div", { style: "display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 8px;" }, [
+        el("div", { class: "card", style: "padding:12px; text-align:center; background: var(--panel-2);" }, [
+          el("div", { style: "font-size:12px; color:var(--text-secondary);" }, "Avg Score"),
+          el("div", { style: "font-size:20px; font-weight:700; color:var(--accent); margin:4px 0;" }, `${s.baseline_avg_score} ➔ ${s.candidate_avg_score}`),
+          el("div", { style: "font-size:11px; color:" + (s.candidate_avg_score >= s.baseline_avg_score ? "var(--accent)" : "var(--high)") }, 
+            (s.candidate_avg_score >= s.baseline_avg_score ? "▲ +" : "▼ ") + (s.candidate_avg_score - s.baseline_avg_score).toFixed(2)
+          )
+        ]),
+        el("div", { class: "card", style: "padding:12px; text-align:center; background: var(--panel-2);" }, [
+          el("div", { style: "font-size:12px; color:var(--text-secondary);" }, "Total Tokens"),
+          el("div", { style: "font-size:18px; font-weight:700; margin:4px 0;" }, `${s.baseline_total_tokens} ➔ ${s.candidate_total_tokens}`),
+          el("div", { style: "font-size:11px;" }, () => {
+            const diff = s.candidate_total_tokens - s.baseline_total_tokens;
+            const pct = s.baseline_total_tokens > 0 ? (diff / s.baseline_total_tokens * 100).toFixed(1) : "0";
+            return (diff >= 0 ? "+" : "") + diff + ` (${pct}%)`;
+          })
+        ]),
+        el("div", { class: "card", style: "padding:12px; text-align:center; background: var(--panel-2);" }, [
+          el("div", { style: "font-size:12px; color:var(--text-secondary);" }, "Avg Latency"),
+          el("div", { style: "font-size:20px; font-weight:700; margin:4px 0;" }, `${s.baseline_avg_latency_ms}ms ➔ ${s.candidate_avg_latency_ms}ms`),
+          el("div", { style: "font-size:11px;" }, () => {
+            const diff = s.candidate_avg_latency_ms - s.baseline_avg_latency_ms;
+            const pct = s.baseline_avg_latency_ms > 0 ? (diff / s.baseline_avg_latency_ms * 100).toFixed(1) : "0";
+            return (diff >= 0 ? "+" : "") + diff + `ms (${pct}%)`;
+          })
+        ])
+      ]);
+
+      detailsWrap.append(statGrid);
+
+      const casesContainer = el("div", { style: "display:flex; flex-direction:column; gap:12px;" });
+      
+      data.results.forEach(res => {
+        const itemHeader = el("div", { style: "padding: 12px; background: var(--panel); border:1px solid var(--border); border-radius: var(--radius-sm); cursor:pointer; display:flex; justify-content:space-between; align-items:center;" }, [
+          el("div", {}, [
+            el("span", { class: "pill pill-muted", style: "font-size:10px; margin-right:8px; text-transform:uppercase;" }, res.task_type),
+            el("span", { style: "font-weight:600;" }, res.case_name)
+          ]),
+          el("div", { style: "font-weight:700; font-size:14px;" }, 
+            res.baseline_error || res.candidate_error ? "❌ Error" : `Score: ${res.baseline_score} ➔ ${res.candidate_score}`
+          )
+        ]);
+
+        const detailedPanel = el("div", { style: "padding: 16px; border:1px solid var(--border); border-top:none; border-radius: 0 0 var(--radius-sm) var(--radius-sm); display:none; flex-direction:column; gap:12px; background:var(--page);" });
+
+        const drawDetails = () => {
+          detailedPanel.innerHTML = "";
+          
+          let gtFormatted = res.ground_truth;
+          try {
+            gtFormatted = JSON.stringify(JSON.parse(res.ground_truth), null, 2);
+          } catch {}
+
+          let bFormatted = res.baseline_output;
+          try {
+            bFormatted = JSON.stringify(JSON.parse(res.baseline_output), null, 2);
+          } catch {}
+
+          let cFormatted = res.candidate_output;
+          try {
+            cFormatted = JSON.stringify(JSON.parse(res.candidate_output), null, 2);
+          } catch {}
+
+          detailedPanel.append(
+            el("div", { style: "display:grid; grid-template-columns: 1fr 1fr; gap:12px;" }, [
+              el("div", {}, [
+                el("label", { style: "font-weight:700; font-size:11px;" }, "Expected Ground Truth"),
+                el("pre", { style: "max-height:200px; overflow-y:auto; font-size:12px; background:var(--panel-2); padding:8px; border-radius:4px;" }, gtFormatted)
+              ]),
+              el("div", {}, [
+                el("label", { style: "font-weight:700; font-size:11px;" }, "Judge Feedback"),
+                el("div", { style: "font-size:12px; background:var(--panel-2); padding:8px; border-radius:4px; min-height:80px; white-space:pre-wrap;" }, res.judge_explanation || "N/A")
+              ])
+            ]),
+            el("div", { style: "display:grid; grid-template-columns: 1fr 1fr; gap:12px;" }, [
+              el("div", { style: "border-top:1px solid var(--border); padding-top:8px;" }, [
+                el("label", { style: "font-weight:700; font-size:11px; display:block;" }, "Baseline Output"),
+                el("div", { style: "font-size:10px; color:var(--text-secondary); margin-bottom:4px;" }, 
+                  `Score: ${res.baseline_score} | Tokens: ${(res.baseline_tokens_in || 0) + (res.baseline_tokens_out || 0)} | Latency: ${res.baseline_latency_ms}ms`
+                ),
+                res.baseline_error 
+                  ? el("div", { class: "warn", style: "font-size:12px;" }, res.baseline_error)
+                  : el("pre", { style: "max-height:240px; overflow-y:auto; font-size:12px; background:var(--panel-2); padding:8px; border-radius:4px;" }, bFormatted)
+              ]),
+              el("div", { style: "border-top:1px solid var(--border); padding-top:8px;" }, [
+                el("label", { style: "font-weight:700; font-size:11px; display:block;" }, "Candidate Output"),
+                el("div", { style: "font-size:10px; color:var(--text-secondary); margin-bottom:4px;" }, 
+                  `Score: ${res.candidate_score} | Tokens: ${(res.candidate_tokens_in || 0) + (res.candidate_tokens_out || 0)} | Latency: ${res.candidate_latency_ms}ms`
+                ),
+                res.candidate_error
+                  ? el("div", { class: "warn", style: "font-size:12px;" }, res.candidate_error)
+                  : el("pre", { style: "max-height:240px; overflow-y:auto; font-size:12px; background:var(--panel-2); padding:8px; border-radius:4px;" }, cFormatted)
+              ])
+            ])
+          );
+        };
+
+        itemHeader.onclick = () => {
+          const isOpen = detailedPanel.style.display === "flex";
+          detailedPanel.style.display = isOpen ? "none" : "flex";
+          itemHeader.style.borderRadius = isOpen ? "var(--radius-sm)" : "var(--radius-sm) var(--radius-sm) 0 0";
+          if (!isOpen) {
+            drawDetails();
+          }
+        };
+
+        casesContainer.append(el("div", {}, [itemHeader, detailedPanel]));
+      });
+
+      detailsWrap.append(el("h4", { style: "margin:8px 0 4px; font-size:14px; font-weight:600;" }, "Detailed Comparison Report"), casesContainer);
+      return detailsWrap;
+    };
+
+    const buildDatasetView = () => {
+      const dataViewWrap = el("div", { style: "display: flex; flex-direction: column; gap: 16px;" });
+
+      const addBtn = el("button", { class: "btn btn-primary", style: "align-self: flex-end;", onclick: () => openAddTestCaseModal() }, "+ Add Test Case");
+      const listTitle = el("h4", { style: "margin: 0; font-size: 15px; font-weight: 600;" }, `Dataset List (${cases.length} cases)`);
+
+      const header = el("div", { style: "display: flex; justify-content: space-between; align-items: center;" }, [listTitle, addBtn]);
+      dataViewWrap.append(header);
+
+      const table = el("table", { style: "width: 100%; border-collapse: collapse; font-size: 14px;" }, [
+        el("thead", {}, el("tr", { style: "border-bottom: 2px solid var(--border); text-align: left;" }, [
+          el("th", { style: "padding: 8px 4px;" }, "Name"),
+          el("th", { style: "padding: 8px 4px;" }, "Type"),
+          el("th", { style: "padding: 8px 4px;" }, "Expected Ground Truth"),
+          el("th", { style: "padding: 8px 4px; text-align: right;" }, "Actions")
+        ]))
+      ]);
+
+      const tbody = el("tbody");
+      if (cases.length === 0) {
+        tbody.append(el("tr", {}, el("td", { colspan: 4, style: "padding:16px; text-align:center;", class: "page-sub" }, "No test cases configured. Add some from document or Q&A history!")));
+      } else {
+        cases.forEach(c => {
+          let gtStr = c.ground_truth;
+          try {
+            gtStr = JSON.stringify(JSON.parse(c.ground_truth));
+          } catch {}
+          if (gtStr.length > 50) gtStr = gtStr.substring(0, 50) + "...";
+
+          const deleteBtn = el("button", { class: "btn btn-quiet", style: "color: var(--high); font-size: 12px; padding: 4px 8px;", onclick: async () => {
+            if (!confirm(`Delete test case "${c.name}"?`)) return;
+            try {
+              await api("/eval/cases/" + c.id, { method: "DELETE" });
+              toast("Deleted test case");
+              const updated = await api("/eval/cases");
+              cases.length = 0;
+              cases.push(...updated);
+              renderTabContent();
+            } catch (err) {
+              toast("Failed to delete case: " + err.message);
+            }
+          } }, "Delete");
+
+          tbody.append(el("tr", { style: "border-bottom: 1px solid var(--border);" }, [
+            el("td", { style: "padding: 8px 4px; font-weight: 500;" }, c.name),
+            el("td", { style: "padding: 8px 4px;" }, el("span", { class: "pill pill-muted", style: "font-size:10px; text-transform:uppercase;" }, c.task_type)),
+            el("td", { style: "padding: 8px 4px; font-family: monospace; font-size: 11px; color: var(--text-secondary);" }, gtStr),
+            el("td", { style: "padding: 8px 4px; text-align: right;" }, deleteBtn)
+          ]));
+        });
+      }
+
+      table.append(tbody);
+      dataViewWrap.append(table);
+
+      return dataViewWrap;
+    };
+
+    const openAddTestCaseModal = async () => {
+      toast("Loading history...");
+      let historyData = null;
+      try {
+        historyData = await api("/eval/cases/history");
+      } catch (err) {
+        toast("Failed to load history: " + err.message);
+        return;
+      }
+
+      const typeSelect = el("select", { style: "width:100%; margin-bottom:12px;" }, [
+        el("option", { value: "extraction" }, "PDF / Image Extraction"),
+        el("option", { value: "qa" }, "Q&A Assistant Query")
+      ]);
+
+      const sourceSelect = el("select", { style: "width:100%; margin-bottom:12px;" });
+      const nameInput = el("input", { type: "text", placeholder: "Case Name (e.g. Lalitha CBC report)", style: "width:100%; margin-bottom:12px;" });
+      const gtArea = el("textarea", { rows: 6, placeholder: "Expected Ground Truth details/facts/JSON (optional for documents, auto-populates)", style: "width:100%; font-family:monospace; font-size:12px;" });
+
+      const rebuildSources = () => {
+        sourceSelect.innerHTML = "";
+        const type = typeSelect.value;
+        if (type === "extraction") {
+          sourceSelect.append(el("option", { value: "" }, "— Select Document —"));
+          historyData.documents.forEach(doc => {
+            sourceSelect.append(el("option", { value: doc.id }, `${doc.filename} (${doc.report_date || 'No Date'}) [${doc.has_extraction ? 'Has AI data' : 'No AI data'}]`));
+          });
+        } else {
+          sourceSelect.append(el("option", { value: "" }, "— Select Q&A Query —"));
+          historyData.qas.forEach(qa => {
+            sourceSelect.append(el("option", { value: qa.id }, `[${qa.member_name}] ${qa.question.substring(0, 45)}...`));
+          });
+        }
+      };
+
+      typeSelect.onchange = () => {
+        rebuildSources();
+        gtArea.value = "";
+        nameInput.value = "";
+      };
+      
+      sourceSelect.onchange = () => {
+        const type = typeSelect.value;
+        const id = parseInt(sourceSelect.value);
+        if (!id) return;
+        if (type === "extraction") {
+          const doc = historyData.documents.find(d => d.id === id);
+          nameInput.value = doc ? doc.filename : "";
+          gtArea.placeholder = "Committed results will be loaded as ground truth automatically. (Leave blank)";
+          gtArea.value = "";
+        } else {
+          const qa = historyData.qas.find(q => q.id === id);
+          nameInput.value = qa ? `QA: ${qa.question.substring(0, 25)}` : "";
+          gtArea.value = qa ? qa.answer : "";
+        }
+      };
+
+      rebuildSources();
+
+      openModal("Add Case from History", [
+        el("div", { class: "field" }, [el("label", {}, "Task Type"), typeSelect]),
+        el("div", { class: "field" }, [el("label", {}, "Select Logged History Item"), sourceSelect]),
+        el("div", { class: "field" }, [el("label", {}, "Test Case Name"), nameInput]),
+        el("div", { class: "field" }, [el("label", {}, "Expected Ground Truth"), gtArea])
+      ], [
+        el("button", { class: "btn", onclick: closeModal }, "Cancel"),
+        el("button", { class: "btn btn-primary", onclick: async () => {
+          const type = typeSelect.value;
+          const id = parseInt(sourceSelect.value);
+          const name = nameInput.value.trim();
+          const gt = gtArea.value.trim();
+
+          if (!id) return toast("Select a history item");
+          if (!name) return toast("Name required");
+
+          try {
+            await api("/eval/cases", {
+              method: "POST",
+              body: {
+                name,
+                task_type: type,
+                input_id: id,
+                ground_truth: gt
+              }
+            });
+            toast("Test case added successfully!");
+            closeModal();
+            const updated = await api("/eval/cases");
+            cases.length = 0;
+            cases.push(...updated);
+            renderTabContent();
+          } catch (err) {
+            toast("Failed to add case: " + err.message);
+          }
+        } }, "Add Case")
+      ]);
+    };
+
+    renderTabContent();
+
+  } catch (err) {
+    container.innerHTML = `<div class="warn" style="padding: 16px;">Failed to load evaluation dashboard: ${err.message}</div>`;
+  }
+}
+
 async function renderSettings(main) {
   main.innerHTML = "";
   document.querySelectorAll('[data-view="settings"]').forEach((b) => b.classList.add("active"));
@@ -3517,7 +3963,11 @@ async function renderSettings(main) {
   const privacySection = createCollapsible("Privacy & Security", state.access.has_pin ? "Protected" : "Public", privacyContent, false);
   const queueSection = createCollapsible("Categorization Queue", pendingCount === 0 ? "Clear" : pendingCount, queueContent, pendingCount > 0);
 
-  main.append(aiSection, promptsSection, privacySection, queueSection);
+  const evalContent = el("div");
+  buildModelEvaluationPanel(evalContent);
+  const evalSection = createCollapsible("Model Evaluation Suite", "Active", evalContent, false);
+
+  main.append(aiSection, promptsSection, privacySection, queueSection, evalSection);
 
   // PWA Add to Home Screen card
   if (window.deferredPrompt) {

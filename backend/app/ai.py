@@ -306,3 +306,148 @@ def chat(provider: str, model: Optional[str], key: Optional[str], system: str, p
     if provider == "openai":
         return _openai_chat(key, model, system, prompt)
     return _gemini_chat(key, model, system, prompt)
+
+
+import time
+
+def chat_with_usage(provider: str, model: Optional[str], key: Optional[str], system: str, prompt: str) -> tuple[str, int, int, int]:
+    provider, model, key = resolve(provider, model, key)
+    start_time = time.perf_counter()
+    
+    if provider == "anthropic":
+        import anthropic
+        client = anthropic.Anthropic(api_key=key)
+        msg = client.messages.create(
+            model=model,
+            max_tokens=2000,
+            system=system,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = "".join(b.text for b in msg.content if b.type == "text")
+        latency = int((time.perf_counter() - start_time) * 1000)
+        return text, msg.usage.input_tokens, msg.usage.output_tokens, latency
+        
+    elif provider == "openai":
+        body = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+        }
+        r = httpx.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {key}"},
+            json=body,
+            timeout=120,
+        )
+        latency = int((time.perf_counter() - start_time) * 1000)
+        if r.status_code >= 400:
+            raise AIError(f"OpenAI error {r.status_code}: {r.text[:300]}")
+        res_json = r.json()
+        text = res_json["choices"][0]["message"]["content"]
+        usage = res_json.get("usage", {})
+        return text, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0), latency
+        
+    else:  # gemini
+        body = {
+            "system_instruction": {"parts": [{"text": system}]},
+            "contents": [{"parts": [{"text": prompt}]}],
+        }
+        r = httpx.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            headers={"x-goog-api-key": key},
+            json=body,
+            timeout=120,
+        )
+        latency = int((time.perf_counter() - start_time) * 1000)
+        if r.status_code >= 400:
+            raise AIError(f"Gemini error {r.status_code}: {r.text[:300]}")
+        res_json = r.json()
+        text = res_json["candidates"][0]["content"]["parts"][0]["text"]
+        usage = res_json.get("usageMetadata", {})
+        return text, usage.get("promptTokenCount", 0), usage.get("candidatesTokenCount", 0), latency
+
+
+def extract_with_usage(provider: str, model: Optional[str], key: Optional[str], data: bytes, mime: str, system_prompt: Optional[str] = None) -> tuple[dict, int, int, int]:
+    provider, model, key = resolve(provider, model, key)
+    sys = system_prompt or EXTRACTION_SYSTEM
+    start_time = time.perf_counter()
+    
+    if provider == "anthropic":
+        import anthropic
+        client = anthropic.Anthropic(api_key=key)
+        b64 = base64.standard_b64encode(data).decode()
+        if mime == "application/pdf":
+            source_block = {"type": "document", "source": {"type": "base64", "media_type": mime, "data": b64}}
+        else:
+            source_block = {"type": "image", "source": {"type": "base64", "media_type": mime, "data": b64}}
+        msg = client.messages.create(
+            model=model,
+            max_tokens=8000,
+            system=sys,
+            messages=[{"role": "user", "content": [source_block, {"type": "text", "text": "Extract the results as JSON."}]}],
+        )
+        text = "".join(b.text for b in msg.content if b.type == "text")
+        latency = int((time.perf_counter() - start_time) * 1000)
+        return _extract_json(text), msg.usage.input_tokens, msg.usage.output_tokens, latency
+        
+    elif provider == "openai":
+        b64 = base64.standard_b64encode(data).decode()
+        if mime == "application/pdf":
+            content = [
+                {"type": "file", "file": {"filename": "report.pdf", "file_data": f"data:application/pdf;base64,{b64}"}},
+                {"type": "text", "text": "Extract the results as JSON."},
+            ]
+        else:
+            content = [
+                {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+                {"type": "text", "text": "Extract the results as JSON."},
+            ]
+        body = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": sys},
+                {"role": "user", "content": content},
+            ],
+        }
+        r = httpx.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {key}"},
+            json=body,
+            timeout=120,
+        )
+        latency = int((time.perf_counter() - start_time) * 1000)
+        if r.status_code >= 400:
+            raise AIError(f"OpenAI error {r.status_code}: {r.text[:300]}")
+        res_json = r.json()
+        text = res_json["choices"][0]["message"]["content"]
+        usage = res_json.get("usage", {})
+        return _extract_json(text), usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0), latency
+        
+    else:  # gemini
+        b64 = base64.standard_b64encode(data).decode()
+        body = {
+            "system_instruction": {"parts": [{"text": sys}]},
+            "contents": [
+                {
+                    "parts": [
+                        {"inline_data": {"mime_type": mime, "data": b64}},
+                        {"text": "Extract the results as JSON."},
+                    ]
+                }
+            ],
+        }
+        r = httpx.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            headers={"x-goog-api-key": key},
+            json=body,
+            timeout=120,
+        )
+        latency = int((time.perf_counter() - start_time) * 1000)
+        if r.status_code >= 400:
+            raise AIError(f"Gemini error {r.status_code}: {r.text[:300]}")
+        res_json = r.json()
+        text = res_json["candidates"][0]["content"]["parts"][0]["text"]
+        usage = res_json.get("usageMetadata", {})
+        return _extract_json(text), usage.get("promptTokenCount", 0), usage.get("candidatesTokenCount", 0), latency
