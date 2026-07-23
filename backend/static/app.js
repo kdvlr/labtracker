@@ -3370,8 +3370,6 @@ function buildCategorizationQueue(categories, onChange) {
   return wrap;
 }
 
-}
-
 async function buildModelEvaluationPanel(container) {
   container.innerHTML = `<div style="text-align: center; padding: 24px;"><span class="spinner"></span> Loading Evaluation Suite...</div>`;
   try {
