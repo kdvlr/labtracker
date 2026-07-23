@@ -59,6 +59,12 @@ def init_db() -> None:
             # Default 0 — an upgrade must never hide someone's results from them.
             conn.execute("ALTER TABLE members ADD COLUMN private INTEGER NOT NULL DEFAULT 0")
             conn.commit()
+        if "medical_info" not in mcols:
+            conn.execute("ALTER TABLE members ADD COLUMN medical_info TEXT")
+            conn.commit()
+        if "medications" not in mcols:
+            conn.execute("ALTER TABLE members ADD COLUMN medications TEXT")
+            conn.commit()
 
         rcols = {r["name"] for r in conn.execute("PRAGMA table_info(results)")}
         if "qualifier" not in rcols:
