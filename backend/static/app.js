@@ -861,6 +861,23 @@ async function renderOverview(main) {
     ]),
   ]));
 
+  const infoBarItems = [];
+  if (member.medical_info && member.medical_info.trim()) {
+    infoBarItems.push(el("div", { class: "info-bar-item" }, [
+      el("strong", {}, "Medical History: "),
+      el("span", {}, member.medical_info.trim())
+    ]));
+  }
+  if (member.medications && member.medications.trim()) {
+    infoBarItems.push(el("div", { class: "info-bar-item" }, [
+      el("strong", {}, "Current Medications: "),
+      el("span", {}, member.medications.trim())
+    ]));
+  }
+  if (infoBarItems.length > 0) {
+    main.append(el("div", { class: "member-info-bar" }, infoBarItems));
+  }
+
   const summary = await api(`/members/${member.id}/summary`);
 
   if (!summary.length) {
@@ -1012,6 +1029,8 @@ function openEditMember(member) {
   const dob = el("input", { type: "date", value: member.dob || "" });
   const sex = el("select", {}, [["", "—"], ["female", "Female"], ["male", "Male"], ["other", "Other"]]
     .map(([v, l]) => el("option", { value: v, ...(v === (member.sex || "") ? { selected: "" } : {}) }, l)));
+  const medicalInfo = el("textarea", { placeholder: "Relevant medical history, allergies, chronic conditions, etc.", style: "width:100%; height:60px;" }, member.medical_info || "");
+  const medications = el("textarea", { placeholder: "Medication names, dosages, frequencies, etc.", style: "width:100%; height:60px;" }, member.medications || "");
   let color = member.color || MEMBER_PALETTE[0];
   const swatches = el("div", { class: "swatches" });
   for (const c of MEMBER_PALETTE) {
@@ -1039,6 +1058,8 @@ function openEditMember(member) {
       el("div", { class: "field" }, [el("label", {}, "Date of birth"), dob]),
       el("div", { class: "field" }, [el("label", {}, "Sex"), sex]),
     ]),
+    el("div", { class: "field" }, [el("label", {}, "Relevant Medical Information"), medicalInfo]),
+    el("div", { class: "field" }, [el("label", {}, "Current Medications"), medications]),
     el("div", { class: "field" }, [el("label", {}, "Color"), swatches]),
     privField,
   ].filter(Boolean), [
@@ -1056,6 +1077,7 @@ function openEditMember(member) {
       if (!name.value.trim()) return toast("Name required");
       await api(`/members/${member.id}`, { method: "PUT", body: {
         name: name.value.trim(), dob: dob.value || null, sex: sex.value || null, color,
+        medical_info: medicalInfo.value.trim() || null, medications: medications.value.trim() || null,
         ...(canTogglePrivate ? { private: priv } : {}),
       } });
       await loadCore(); closeModal(); render();
@@ -4036,6 +4058,8 @@ function openAddMember() {
   const name = el("input", { type: "text", placeholder: "e.g. Priya" });
   const dob = el("input", { type: "date" });
   const sex = el("select", {}, [el("option", { value: "" }, "—"), el("option", { value: "female" }, "Female"), el("option", { value: "male" }, "Male"), el("option", { value: "other" }, "Other")]);
+  const medicalInfo = el("textarea", { placeholder: "Relevant medical history, allergies, chronic conditions, etc.", style: "width:100%; height:60px;" });
+  const medications = el("textarea", { placeholder: "Medication names, dosages, frequencies, etc.", style: "width:100%; height:60px;" });
   const color = MEMBER_PALETTE[state.members.length % MEMBER_PALETTE.length];
   openModal("Add family member", [
     el("div", { class: "field" }, [el("label", {}, "Name"), name]),
@@ -4043,11 +4067,16 @@ function openAddMember() {
       el("div", { class: "field" }, [el("label", {}, "Date of birth"), dob]),
       el("div", { class: "field" }, [el("label", {}, "Sex"), sex]),
     ]),
+    el("div", { class: "field" }, [el("label", {}, "Relevant Medical Information"), medicalInfo]),
+    el("div", { class: "field" }, [el("label", {}, "Current Medications"), medications]),
   ], [
     el("button", { class: "btn", onclick: closeModal }, "Cancel"),
     el("button", { class: "btn btn-primary", onclick: async () => {
       if (!name.value.trim()) return toast("Name required");
-      const m = await api("/members", { method: "POST", body: { name: name.value.trim(), dob: dob.value || null, sex: sex.value || null, color } });
+      const m = await api("/members", { method: "POST", body: {
+        name: name.value.trim(), dob: dob.value || null, sex: sex.value || null, color,
+        medical_info: medicalInfo.value.trim() || null, medications: medications.value.trim() || null
+      } });
       await loadCore(); closeModal(); navigateTo("overview", { activeMember: m.id });
     } }, "Add"),
   ]);

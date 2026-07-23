@@ -445,6 +445,8 @@ class Member(BaseModel):
     sex: Optional[str] = None
     color: Optional[str] = None
     private: Optional[bool] = None
+    medical_info: Optional[str] = None
+    medications: Optional[str] = None
 
 
 @app.get("/api/members")
@@ -465,8 +467,8 @@ def create_member(m: Member, request: Request):
         if m.private:
             _require_unlocked(conn, request)
         cur = conn.execute(
-            "INSERT INTO members (name, dob, sex, color, private) VALUES (?, ?, ?, ?, ?)",
-            (m.name, m.dob, m.sex, m.color, 1 if m.private else 0),
+            "INSERT INTO members (name, dob, sex, color, private, medical_info, medications) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (m.name, m.dob, m.sex, m.color, 1 if m.private else 0, m.medical_info, m.medications),
         )
         conn.commit()
         row = conn.execute("SELECT * FROM members WHERE id = ?", (cur.lastrowid,)).fetchone()
@@ -488,9 +490,12 @@ def update_member(member_id: int, m: Member, request: Request):
         if private != row["private"]:
             _require_unlocked(conn, request)
         conn.execute(
-            "UPDATE members SET name = ?, dob = ?, sex = ?, color = ?, private = ? WHERE id = ?",
-            (m.name, m.dob, m.sex, m.color, private, member_id),
+            "UPDATE members SET name = ?, dob = ?, sex = ?, color = ?, private = ?, medical_info = ?, medications = ? WHERE id = ?",
+            (m.name, m.dob, m.sex, m.color, private, m.medical_info, m.medications, member_id),
         )
+        # Invalidate any cached analyses/descriptions for this member
+        conn.execute("DELETE FROM member_descriptions WHERE member_id = ?", (member_id,))
+        conn.execute("DELETE FROM member_analyses WHERE member_id = ?", (member_id,))
         conn.commit()
         row = conn.execute("SELECT * FROM members WHERE id = ?", (member_id,)).fetchone()
         return dict(row)
@@ -774,11 +779,19 @@ def describe_test_type(tt_id: int, request: Request, member_id: Optional[int] = 
                 if missing:
                     related_readings_str += f"\n({missing} other marker(s) in this panel have no readings on file.)"
 
+                extra_context = []
+                if member["medical_info"] and member["medical_info"].strip():
+                    extra_context.append(f"Relevant Medical Information: {member['medical_info'].strip()}")
+                if member["medications"] and member["medications"].strip():
+                    extra_context.append(f"Current Medications: {member['medications'].strip()}")
+                extra_context_str = "\n".join(extra_context) + "\n\n" if extra_context else ""
+
                 # Deliberately no name: the provider needs age/sex to interpret a
                 # value, but never who the person is. Keep identifiers local.
                 member_context = (
                     f"Write this clinical reference guide specifically for the patient:\n"
-                    f"Age: {age_str}, Sex: {sex}.\n\n"
+                    f"Age: {age_str}, Sex: {sex}.\n"
+                    f"{extra_context_str}"
                     f"MAIN TEST — {row['name']}. The LATEST reading is the patient's "
                     f"current state; the history behind it is the trajectory:\n{history_str}\n\n"
                     f"REST OF THE {(row['category'] or 'panel').upper()} PANEL, same format — "
@@ -1955,8 +1968,17 @@ def _analysis_inputs(conn, member_id: int):
     age = age_at(member["dob"]) if member and member["dob"] else None
     sex = (member["sex"] if member else None) or "not specified"
     age_str = f"{age} years old" if age is not None else "age not specified"
+    
+    extra_details = []
+    if member and member["medical_info"] and member["medical_info"].strip():
+        extra_details.append(f"Relevant Medical Information: {member['medical_info'].strip()}")
+    if member and member["medications"] and member["medications"].strip():
+        extra_details.append(f"Current Medications: {member['medications'].strip()}")
+    extra_str = "\n".join(extra_details) + "\n\n" if extra_details else ""
+
     body = (
-        f"Patient: {age_str}, sex {sex}. {len(by_id)} biomarkers tracked.\n\n"
+        f"Patient: {age_str}, sex {sex}. {len(by_id)} biomarkers tracked.\n"
+        f"{extra_str}"
         "Complete lab history. For each marker the LATEST reading (the current "
         "state) is marked first, then the full history oldest→newest so you can "
         "read short-term vs long-term trend:\n\n"
@@ -1999,10 +2021,18 @@ def _results_fingerprint(conn, member_id: int):
            FROM results WHERE member_id = ?""",
         (member_id,),
     ).fetchall()
-    if not rows:
+    member = conn.execute("SELECT medical_info, medications FROM members WHERE id = ?", (member_id,)).fetchone()
+    if not rows and not member:
         return None, 0
-    h = hashlib.sha256("|".join(sorted(_fingerprint_parts(rows))).encode()).hexdigest()
-    return h, len({r["test_type_id"] for r in rows})
+    
+    parts = sorted(_fingerprint_parts(rows)) if rows else []
+    med_info = member["medical_info"] or "" if member else ""
+    meds = member["medications"] or "" if member else ""
+    parts.append(f"med_info:{med_info}")
+    parts.append(f"meds:{meds}")
+    
+    h = hashlib.sha256("|".join(parts).encode()).hexdigest()
+    return h, len({r["test_type_id"] for r in rows}) if rows else 0
 
 
 def _legacy_results_fingerprint(conn, member_id: int):
@@ -2412,7 +2442,6 @@ def ask(req: AskReq, request: Request):
         member = conn.execute("SELECT * FROM members WHERE id = ?", (req.member_id,)).fetchone()
         if not member:
             raise HTTPException(404, "Member not found")
-        # Age/sex help interpretation; the person's name never leaves the box.
         age = age_at(member["dob"])
         who = ["Patient"]
         if age is not None:
@@ -2420,6 +2449,14 @@ def ask(req: AskReq, request: Request):
         if member["sex"]:
             who.append(str(member["sex"]))
         lines = [" · ".join(who)]
+        
+        extra_info = []
+        if member["medical_info"] and member["medical_info"].strip():
+            extra_info.append(f"Medical Info: {member['medical_info'].strip()}")
+        if member["medications"] and member["medications"].strip():
+            extra_info.append(f"Medications: {member['medications'].strip()}")
+        if extra_info:
+            lines.append(" · ".join(extra_info))
         for ttid in req.test_type_ids:
             tt = conn.execute("SELECT * FROM test_types WHERE id = ?", (ttid,)).fetchone()
             if not tt:

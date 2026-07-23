@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS members (
     -- 0 (default) = always visible, no PIN, no interaction. The people who use
     -- this app daily should never meet a lock screen.
     private INTEGER NOT NULL DEFAULT 0,
+    medical_info TEXT,
+    medications TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

@@ -1229,5 +1229,25 @@ textarea { resize: vertical; }
   color: var(--text-primary);
 }
 
+.member-info-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 16px;
+  margin-bottom: 20px;
+  font-size: 13.5px;
+}
+.info-bar-item {
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+.info-bar-item strong {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
 
 
