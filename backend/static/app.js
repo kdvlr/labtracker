@@ -1218,20 +1218,8 @@ async function renderHousehold(main) {
       ]),
     ]);
 
-    const historyBtn = el("button", {
-      class: "btn btn-sm",
-      style: "font-size: 12px; padding: 4px 10px;",
-      onclick: (e) => {
-        e.stopPropagation();
-        openMemberHistory(m.id);
-      }
-    }, "📁 Reports History");
-
     if (!summary.length) {
-      card.append(el("div", { class: "hh-empty", style: "display:flex; justify-content:space-between; align-items:center;" }, [
-        el("span", {}, "Upload a report to start tracking."),
-        historyBtn
-      ]));
+      card.append(el("div", { class: "hh-empty" }, "Upload a report to start tracking."));
       mount.append(card);
       return;
     }
@@ -1248,8 +1236,7 @@ async function renderHousehold(main) {
     const footerRow = el("div", {
       style: "display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border);"
     }, [
-      el("div", { class: "hh-pills", style: "margin-bottom: 0;" }, pills),
-      historyBtn
+      el("div", { class: "hh-pills", style: "margin-bottom: 0;" }, pills)
     ]);
 
     card.append(footerRow);
