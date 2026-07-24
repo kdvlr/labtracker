@@ -148,21 +148,28 @@ def auto_import_items(conn, doc_id: int) -> dict:
             "UPDATE document_items SET error_reason = ? WHERE id = ?", (reason, item_id)
         )
 
-    if doc["extraction"] and member:
-        try:
-            extraction = json.loads(doc["extraction"])
-            p_name = extraction.get("patient_name") or ""
-            m_name = member["name"] or ""
-            if p_name and m_name:
-                p_clean = "".join(c for c in p_name.lower() if c.isalnum())
-                m_clean = "".join(c for c in m_name.lower() if c.isalnum())
-                if p_clean and m_clean and p_clean not in m_clean and m_clean not in p_clean:
-                    reason = f"Name mismatch: report says '{p_name}', profile is '{m_name}'"
-                    for it in pending:
-                        hold(it["id"], reason)
-                    return out
-        except Exception:
-            pass
+    # A report must belong to the member it is filed under before any of it is
+    # written to their record. This is the single enforcement point: it covers
+    # the upload path AND the legacy /extract endpoint (which has no name check
+    # of its own), so a mismatched report can never be auto-imported into the
+    # wrong profile. The concatenated-substring check this replaces was defeated
+    # by the same family/spouse-name overlap as the upload check —
+    # "dvramanarao" is a substring of "lalithawodvramanarao". match_patient_name
+    # strips the relative ("W/O ...") off first, so it holds.
+    if member:
+        p_name = ""
+        if doc["extraction"]:
+            try:
+                p_name = json.loads(doc["extraction"]).get("patient_name") or ""
+            except Exception:
+                p_name = ""
+        if not match_patient_name(member["name"] or "", p_name):
+            reason = (f"Name mismatch: report says '{p_name or 'unknown'}', "
+                      f"profile is '{member['name']}' — confirm this is theirs or reassign")
+            for it in pending:
+                hold(it["id"], reason)
+            out["name_mismatch"] = True
+            return out
 
     # Values taken in this pass, so a report listing the same analyte twice does
     # not import it twice — the saved-results query below cannot see them yet.
@@ -893,14 +900,61 @@ def sanitize_name(text: str) -> str:
     return clean.strip('_')
 
 
+# Titles to drop, and the "of" filler word that is never part of a name.
+_NAME_HONORIFICS = {"mr", "mrs", "ms", "miss", "dr", "master", "smt", "sri",
+                    "shri", "kum", "baby", "of"}
+
+# Relation markers that introduce a *relative's* name on Indian lab reports:
+# W/O, S/O, D/O, C/O (slash, dot or space variants) and the spelled forms. The
+# patient is whoever comes before them — "LALITHA W/O RAMANA RAO" is Lalitha.
+# Matched as a pattern rather than as single-letter tokens so a leading initial
+# ("D V RAMANA RAO") is not mistaken for D/O and does not truncate the name.
+_RELATION_RE = re.compile(
+    r"\b[wsdc]\s*[/.]?\s*o\b|\b(?:wife|son|daughter|child|care|husband)\s+of\b",
+    re.IGNORECASE,
+)
+
+
+def _patient_own_name_tokens(patient_name: str) -> list:
+    """Name tokens for the patient THEMSELVES: everything from the first relation
+    marker (W/O, S/O, ...) onward is discarded as a relative, then honorifics and
+    bare initials are dropped."""
+    head = _RELATION_RE.split((patient_name or "").lower(), maxsplit=1)[0]
+    return [
+        t for t in re.findall(r"[a-z0-9]+", head)
+        if len(t) >= 2 and t not in _NAME_HONORIFICS
+    ]
+
+
 def match_patient_name(member_name: str, patient_name: str) -> bool:
+    """Best-effort check that a report belongs to the selected member.
+
+    The previous version passed on a single shared token, which let a whole
+    family's reports onto one profile: relatives share a surname, and a married
+    woman's report prints her husband's name, so "rao"/"ramana" overlapped
+    D.V. Ramana Rao's tokens and passed. Now the member's *given* name — the
+    token that actually distinguishes people within a family — must appear in the
+    patient's own name, with any named relative stripped off first.
+
+    A false reject is safe here: the report is held for review and the user
+    confirms or reassigns. A false accept silently writes one person's results
+    onto another's medical record, so the check leans strict.
+    """
     if not patient_name or not patient_name.strip():
-        # If the report has no patient name, allow it (best effort)
+        return True                       # no name on the report — nothing to check
+    m = [t for t in re.findall(r"[a-z0-9]+", (member_name or "").lower())
+         if len(t) >= 2 and t not in _NAME_HONORIFICS]
+    p = set(_patient_own_name_tokens(patient_name))
+    if not m or not p:
+        return True                       # unusual formatting — don't hard-block
+    given = m[0]                          # first real token; initials already gone
+    if given in p:
         return True
-    m_tokens = set(re.findall(r'[a-zA-Z0-9]+', member_name.lower()))
-    p_tokens = set(re.findall(r'[a-zA-Z0-9]+', patient_name.lower()))
-    intersect = m_tokens.intersection(p_tokens)
-    return len(intersect) > 0
+    # Concatenated spellings ("RAMANARAO"): match the given name as a substring,
+    # but only when it is long enough that the overlap can't be coincidence.
+    if len(given) >= 4 and any(given in tok for tok in p):
+        return True
+    return False
 
 
 # ---------------- documents / upload / extract ----------------
