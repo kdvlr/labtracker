@@ -691,6 +691,23 @@ const TREND = {
   new: { cls: "flat", arrow: "•", label: "new" },
   insufficient: { cls: "flat", arrow: "·", label: "not enough history" },
 };
+// How sure the model is about a cross-panel pattern. Deliberately NOT the
+// status palette: green/amber/red mean clinical status everywhere else in this
+// app, and a tentative pattern is not a mild illness. Neutral weights instead.
+const CONFIDENCE = {
+  strong:    { cls: "conf-strong",    label: "Strong signal" },
+  moderate:  { cls: "conf-moderate",  label: "Moderate signal" },
+  tentative: { cls: "conf-tentative", label: "Tentative — worth checking" },
+};
+// Plain-English names for the pattern taxonomy the prompt uses.
+const PATTERN_LABEL = {
+  within_range_drift: "Drifting within the normal range — never flagged by a lab",
+  cross_panel: "Spans panels that were ordered separately",
+  ratio: "A ratio the lab doesn't print",
+  medication: "Possible medication interaction",
+  discordance: "Markers that usually move together are diverging",
+  temporal: "One marker shifting after another",
+};
 // A small labelled chip for one trend horizon; null when the direction is unknown.
 function trendChip(horizon, dir) {
   const t = TREND[dir];
@@ -794,6 +811,45 @@ function renderAnalysisBody(card, data, member, regenerate) {
     card.append(el("div", { class: "analysis-allclear" }, "✓ No specific concerns flagged in this review."));
   }
 
+  // Cross-panel correlations — patterns that span panels, years or labs, which
+  // no single visit puts on one page. Rendered distinctly from "areas to look
+  // at": these are observations to raise, not established problems, so each one
+  // shows its evidence and its confidence rather than a severity.
+  const correlations = Array.isArray(a.correlations) ? a.correlations : [];
+  if (correlations.length) {
+    card.append(el("div", { class: "analysis-section-label" }, "Patterns across your full history"));
+    card.append(el("p", { class: "analysis-section-note" },
+      "Your records span several panels and years. These are connections that show up across the whole picture rather than on any one report — worth raising with your doctor, who has the examination and symptoms this cannot see."));
+    for (const c of correlations) {
+      const conf = CONFIDENCE[c.confidence] || CONFIDENCE.tentative;
+      card.append(el("div", { class: "correlation-card" }, [
+        el("div", { class: "correlation-head" }, [
+          el("div", { class: "correlation-title" }, c.title || ""),
+          el("span", { class: "conf-chip " + conf.cls }, conf.label),
+        ]),
+        PATTERN_LABEL[c.pattern]
+          ? el("div", { class: "correlation-kind" }, PATTERN_LABEL[c.pattern]) : null,
+        Array.isArray(c.markers) && c.markers.length
+          ? el("div", { class: "problem-markers" },
+              c.markers.map((m) => el("span", { class: "marker-chip" }, m))) : null,
+        c.interpretation ? el("p", { class: "problem-body" }, c.interpretation) : null,
+        // The numbers behind the claim. Shown, not hidden: a pattern assembled
+        // from readings years apart is only trustworthy if you can see them.
+        c.evidence ? el("div", { class: "correlation-evidence" }, c.evidence) : null,
+        c.why_easy_to_miss
+          ? el("div", { class: "correlation-missed" }, [
+              el("span", { class: "correlation-missed-label" }, "Why it's easy to miss: "),
+              el("span", {}, c.why_easy_to_miss),
+            ]) : null,
+        c.ask_doctor
+          ? el("div", { class: "correlation-ask" }, [
+              el("span", { class: "correlation-ask-label" }, "Ask your doctor: "),
+              el("span", {}, c.ask_doctor),
+            ]) : null,
+      ].filter(Boolean)));
+    }
+  }
+
   // Trends — each marker gets a short-term and a long-term horizon (with
   // fallback to the pre-split `direction` field for older cached analyses).
   const trends = Array.isArray(a.trends) ? a.trends : [];
@@ -831,6 +887,14 @@ function renderAnalysisBody(card, data, member, regenerate) {
   if (a.age_context) {
     card.append(el("div", { class: "analysis-section-label" }, "In the context of age"));
     card.append(el("p", { class: "problem-body", style: "margin:0" }, a.age_context));
+  }
+
+  // Tests that would settle a question raised above — the useful inverse of the
+  // findings, and something only a full-history view can identify.
+  const gaps = Array.isArray(a.data_gaps) ? a.data_gaps : [];
+  if (gaps.length) {
+    card.append(el("div", { class: "analysis-section-label" }, "Worth measuring next time"));
+    card.append(el("ul", { class: "doctor-list" }, gaps.map((s) => el("li", {}, s))));
   }
 
   card.append(el("p", { class: "analysis-disclaimer" }, a.disclaimer || "This is an automated summary, not a medical diagnosis. Always consult a clinician."));

@@ -924,6 +924,37 @@ textarea { resize: vertical; }
 .trend-row { font-size: 15px; line-height: 1.5; }
 .trend-row-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .trend-detail { margin-top: 3px; color: var(--text-secondary); }
+/* Cross-panel correlations. Visually distinct from .problem-card: those are
+   assessed problems with a clinical severity, these are observations to raise
+   with a doctor. Neutral accent border rather than a status colour, because
+   green/amber/red are reserved for clinical status throughout this app. */
+.correlation-card {
+  border: 1px solid var(--border); border-left: 4px solid var(--accent);
+  border-radius: var(--radius-sm); background: var(--panel-2);
+  padding: 14px 16px; margin-bottom: 12px;
+}
+.correlation-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.correlation-title { font-weight: 600; font-size: 16px; }
+.correlation-kind { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+/* The numbers behind the claim, in a monospace block so dates and values line
+   up and read as data rather than as more prose. */
+.correlation-evidence {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px; line-height: 1.5; color: var(--text-secondary);
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 8px 10px; margin-top: 8px;
+  overflow-x: auto;
+}
+.correlation-missed, .correlation-ask { font-size: 14.5px; line-height: 1.5; margin-top: 8px; color: var(--text-secondary); }
+.correlation-missed-label, .correlation-ask-label { font-weight: 600; color: var(--text-primary); }
+.conf-chip { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: var(--radius-pill); white-space: nowrap; border: 1px solid var(--border); }
+/* --chip-ink, not #fff: --accent is a dark greige in light mode (white reads
+   6.9:1) but a pale blue in dark mode, where white would fall to ~2:1. */
+.conf-strong { background: var(--accent); color: var(--chip-ink); border-color: var(--accent); }
+.conf-moderate { background: var(--panel); color: var(--text-primary); border-color: var(--baseline); }
+.conf-tentative { background: var(--panel); color: var(--muted); }
+.analysis-section-note { font-size: 14px; line-height: 1.55; color: var(--text-secondary); margin: 0 0 12px; }
+
 .positive-list, .doctor-list { margin: 0; padding-left: 20px; }
 .positive-list li, .doctor-list li { margin-bottom: 6px; font-size: 15px; line-height: 1.5; }
 .positive-list li { color: var(--good); }

@@ -699,9 +699,30 @@ def _marker_history_lines(conn, member_id: int, tt_ids: Optional[list] = None,
             except ValueError:
                 span = f" [{n} readings]"
 
+        # Within-range drift, computed here rather than left to the model.
+        #
+        # A lab flags a value only when it crosses a bound, so a marker that has
+        # travelled most of the way across its own reference range — 20% to 85%
+        # — is never flagged by anyone and never appears abnormal on any single
+        # report. It is the least visible real trend in the data. Stating the
+        # movement as a position in range makes it explicit, and doing the
+        # arithmetic in Python keeps it correct: asking an LLM to do this across
+        # 200 markers invites confident wrong numbers.
+        drift = ""
+        if n > 1 and lo is not None and hi is not None and hi > lo:
+            first_v, last_v = points[0]["value_canonical"], latest["value_canonical"]
+            if first_v is not None and last_v is not None:
+                p0 = (first_v - lo) / (hi - lo) * 100
+                p1 = (last_v - lo) / (hi - lo) * 100
+                # Only when it stayed inside the range throughout: once a value
+                # crosses a bound the H/L flag already tells the story.
+                if 0 <= p0 <= 100 and 0 <= p1 <= 100 and abs(p1 - p0) >= 25:
+                    drift = (f"  [WITHIN-RANGE DRIFT: {p0:.0f}% → {p1:.0f}% of range, "
+                             f"{'rising' if p1 > p0 else 'falling'}, never flagged]")
+
         cat = f"[{points[0]['category'] or 'Other'}] " if include_category else ""
         head = (f"{cat}{name}{ref} — LATEST {str(latest['taken_at'])[:10]}: "
-                f"{fmt_val(latest)} ({status_by_id.get(tid, '')})")
+                f"{fmt_val(latest)} ({status_by_id.get(tid, '')}){drift}")
 
         # Only worth the tokens when the lab's unit actually differs from the
         # canonical one — otherwise "reported as" restates the same number.
@@ -2030,12 +2051,34 @@ def _analysis_inputs(conn, member_id: int):
         extra_details.append(f"Current Medications: {member['medications'].strip()}")
     extra_str = "\n".join(extra_details) + "\n\n" if extra_details else ""
 
+    # Draw dates with a marker count each. Two markers only describe the same
+    # moment in the body if they were drawn from the same blood; comparing a
+    # 2021 ferritin against a 2026 haemoglobin is not a finding. Listing which
+    # dates carry a full panel tells the model where a cross-marker comparison
+    # is actually valid — and which markers are too stale to reason from.
+    draw_rows = conn.execute(
+        """SELECT substr(taken_at, 1, 10) AS d, COUNT(*) AS n
+           FROM results WHERE member_id = ?
+           GROUP BY d ORDER BY d""",
+        (member_id,),
+    ).fetchall()
+    draws = ", ".join(f"{r['d']} ({r['n']})" for r in draw_rows)
+    draw_str = (
+        "Collection dates, with how many markers were drawn on each. Only "
+        "markers sharing a date describe the same moment — do not correlate "
+        "values drawn years apart:\n" + draws + "\n\n"
+    ) if draw_rows else ""
+
     body = (
         f"Patient: {age_str}, sex {sex}. {len(by_id)} biomarkers tracked.\n"
         f"{extra_str}"
+        f"{draw_str}"
         "Complete lab history. For each marker the LATEST reading (the current "
         "state) is marked first, then the full history oldest→newest so you can "
-        "read short-term vs long-term trend:\n\n"
+        "read short-term vs long-term trend. Where a marker has moved "
+        "substantially across its own reference range without ever crossing a "
+        "bound, that movement is marked WITHIN-RANGE DRIFT — it was never "
+        "flagged by the lab:\n\n"
         + "\n".join(lines)
     )
     # Reuse the one fingerprint definition so a cached analysis can never look
