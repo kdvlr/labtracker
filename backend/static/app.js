@@ -324,7 +324,18 @@ const fmtNum = (n) => (n == null ? "—" : Number(n).toLocaleString(undefined, {
 // A non-detect ("<0.01") must never render as a bare measurement — keep the
 // comparator the lab printed.
 const fmtVal = (n, qualifier) => (n == null ? "—" : (qualifier ? qualifier : "") + fmtNum(n));
-const fmtDate = (s) => (s ? new Date(s).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "—");
+// A collection date is a calendar date, not a moment in time. `new Date("2025-01-15")`
+// parses a bare ISO date as UTC midnight, so anywhere behind UTC it rendered as
+// the 14th — every date in the app was a day early in the Americas. Build these
+// from the parts instead so the date shown is the date stored. Timestamps that
+// carry a time component still go through the normal (zone-aware) path.
+const fmtDate = (s) => {
+  if (!s) return "—";
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s).trim());
+  const d = m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date(s);
+  return isNaN(d) ? String(s)
+    : d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+};
 // SQLite CURRENT_TIMESTAMP is UTC without a zone marker; append Z so it renders
 // in the viewer's local time rather than as if it were already local.
 const fmtDateTime = (s) => {
@@ -755,6 +766,92 @@ const PATTERN_LABEL = {
   discordance: "Markers that usually move together are diverging",
   temporal: "One marker shifting after another",
 };
+// A marker name as written by the AI, turned into a chip you can trace.
+//
+// The analysis names markers as free text, so the name has to be resolved back
+// to a catalog test before it can link anywhere. A name that doesn't resolve
+// stays an inert chip rather than a dead link — and is itself worth noticing,
+// since it means the model named something not in the catalog.
+function markerChip(name, member) {
+  const wanted = String(name || "").trim().toLowerCase();
+  const tt = (state.testTypes || []).find(
+    (t) => (t.name || "").trim().toLowerCase() === wanted
+  ) || (state.testTypes || []).find(
+    (t) => (t.aliases || []).some((a) => String(a).trim().toLowerCase() === wanted)
+  );
+  if (!tt || !member) return el("span", { class: "marker-chip" }, name);
+  return el("button", {
+    class: "marker-chip marker-chip-link",
+    title: `Where did ${tt.name} come from?`,
+    onclick: () => openMarkerProvenance(member, tt),
+  }, [name, el("span", { class: "marker-chip-caret" }, "›")]);
+}
+
+// Every reading of one marker, and the report each came from.
+async function openMarkerProvenance(member, tt) {
+  const body = el("div", {}, el("p", { class: "settings-note" },
+    [el("span", { class: "spinner" }), " Tracing readings…"]));
+  openModal(tt.name, [body], [el("button", { class: "btn", onclick: closeModal }, "Close")]);
+
+  let data;
+  try {
+    data = await api(`/members/${member.id}/markers/${tt.id}/provenance`);
+  } catch (e) {
+    body.innerHTML = "";
+    body.append(el("div", { class: "warn" }, "Couldn't load: " + e.message));
+    return;
+  }
+
+  body.innerHTML = "";
+  if (!data.readings.length) {
+    body.append(el("div", { class: "empty" }, "No readings on file for this marker."));
+    return;
+  }
+  // Worth stating plainly: the date is not independent evidence. It was read
+  // off the PDF by the AI at import, and the report date, every reading in that
+  // report and even the stored filename all inherit that one reading. So if a
+  // date looks wrong, nothing on this screen can confirm it — only the PDF can.
+  body.append(el("p", { class: "settings-note" },
+    `${data.readings.length} reading${data.readings.length === 1 ? "" : "s"} on file. ` +
+    "Each date was read off the report by AI at import, and every reading in a report shares it — " +
+    "so if a date looks wrong, open the original to check it against the page."));
+
+  const list = el("div", { class: "prov-list" });
+  for (const r of data.readings) {
+    const val = r.value_canonical !== null && r.value_canonical !== undefined
+      ? `${fmtVal(r.value_canonical, r.qualifier)} ${data.canonical_unit || ""}`.trim()
+      : (r.value_text || "—");
+    const rows = [
+      el("div", { class: "prov-head" }, [
+        el("span", { class: "prov-date" }, fmtDate(r.taken_at)),
+        el("span", { class: "prov-value" }, val + (r.flag ? ` (${r.flag})` : "")),
+      ]),
+    ];
+    if (r.document_id) {
+      rows.push(el("div", { class: "prov-source" }, [
+        el("span", {}, r.filename || "Report"),
+        r.lab_name ? el("span", { class: "prov-dim" }, " · " + r.lab_name) : null,
+        r.page_number ? el("span", { class: "prov-dim" }, ` · page ${r.page_number}`) : null,
+        r.auto_imported ? el("span", { class: "prov-dim" }, " · imported automatically") : null,
+      ].filter(Boolean)));
+      // The check that answers "why does it say January 2025?" — the reading's
+      // date against the date on the document it came from.
+      if (r.date_matches_document === false) {
+        rows.push(el("div", { class: "prov-mismatch" },
+          `This reading is dated ${fmtDate(r.taken_at)} but its report is dated ${fmtDate(r.report_date)}.`));
+      }
+      rows.push(el("div", { class: "prov-actions" }, [
+        el("button", { class: "btn btn-sm",
+          onclick: () => openDocumentFile(r.document_id, r.page_number) }, "Open source PDF"),
+      ]));
+    } else {
+      rows.push(el("div", { class: "prov-source prov-dim" }, "Entered manually — no source report."));
+    }
+    list.append(el("div", { class: "prov-row" }, rows));
+  }
+  body.append(list);
+}
+
 // A small labelled chip for one trend horizon; null when the direction is unknown.
 function trendChip(horizon, dir) {
   const t = TREND[dir];
@@ -846,7 +943,7 @@ function renderAnalysisBody(card, data, member, regenerate) {
         p.explanation ? el("p", { class: "problem-body" }, p.explanation) : null,
         p.trend_note ? el("p", { class: "trend-note" }, "📈 " + p.trend_note) : null,
         Array.isArray(p.markers) && p.markers.length
-          ? el("div", { class: "problem-markers" }, p.markers.map((m) => el("span", { class: "marker-chip" }, m)))
+          ? el("div", { class: "problem-markers" }, p.markers.map((m) => markerChip(m, member)))
           : null,
         Array.isArray(p.actions) && p.actions.length
           ? el("ul", { class: "problem-actions" }, p.actions.map((s) => el("li", {}, s)))
@@ -878,7 +975,7 @@ function renderAnalysisBody(card, data, member, regenerate) {
           ? el("div", { class: "correlation-kind" }, PATTERN_LABEL[c.pattern]) : null,
         Array.isArray(c.markers) && c.markers.length
           ? el("div", { class: "problem-markers" },
-              c.markers.map((m) => el("span", { class: "marker-chip" }, m))) : null,
+              c.markers.map((m) => markerChip(m, member))) : null,
         c.interpretation ? el("p", { class: "problem-body" }, c.interpretation) : null,
         // The numbers behind the claim. Shown, not hidden: a pattern assembled
         // from readings years apart is only trustworthy if you can see them.

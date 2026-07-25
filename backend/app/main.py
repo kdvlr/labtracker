@@ -1915,6 +1915,52 @@ def import_document_item(doc_id: int, item_id: int, req: ItemImportReq, request:
 
 # ---------------- reading results / trends ----------------
 
+@app.get("/api/members/{member_id}/markers/{tt_id}/provenance")
+def marker_provenance(member_id: int, tt_id: int, request: Request):
+    """Every reading of one marker with the document it was imported from.
+
+    The analysis speaks in dates ("elevated in January 2025"), but a date is an
+    inference: on import every row inherits the ONE report_date the AI read off
+    the PDF, so a single misread date relabels an entire report. Without a way
+    back to the source there is no way to tell a real result from a mis-dated
+    one. This is that way back.
+    """
+    conn = get_db()
+    try:
+        _require_member(conn, request, member_id)
+        tt = conn.execute("SELECT id, name, canonical_unit FROM test_types WHERE id = ?", (tt_id,)).fetchone()
+        if not tt:
+            raise HTTPException(404, "Unknown test")
+        rows = conn.execute(
+            """SELECT r.id, r.taken_at, r.value, r.unit, r.value_canonical, r.value_text,
+                      r.flag, r.qualifier, r.created_at,
+                      d.id AS document_id, d.filename, d.report_date, d.lab_name,
+                      di.page_number, di.auto_imported
+               FROM results r
+               LEFT JOIN documents d ON d.id = r.document_id
+               LEFT JOIN document_items di ON di.result_id = r.id
+               WHERE r.member_id = ? AND r.test_type_id = ?
+               ORDER BY r.taken_at DESC""",
+            (member_id, tt_id),
+        ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            # The date on the result vs the date on the source document. They
+            # normally match — when they don't, the reading was edited or
+            # re-dated by hand, and that is worth seeing.
+            d["date_matches_document"] = (
+                str(d["report_date"] or "")[:10] == str(d["taken_at"] or "")[:10]
+                if d["report_date"] else None
+            )
+            d["auto_imported"] = bool(d["auto_imported"])
+            out.append(d)
+        return {"test_type_id": tt["id"], "name": tt["name"],
+                "canonical_unit": tt["canonical_unit"], "readings": out}
+    finally:
+        conn.close()
+
+
 @app.get("/api/results")
 def get_results(request: Request, member_id: Optional[int] = None, test_type_id: Optional[int] = None):
     conn = get_db()

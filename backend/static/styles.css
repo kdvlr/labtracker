@@ -834,6 +834,37 @@ textarea { resize: vertical; }
 }
 
 /* Collapsible groups on settings */
+/* Marker chips that trace back to their source. A chip is only a button when
+   the AI's marker name resolved to a real catalog test — an unresolved name
+   stays inert rather than becoming a dead link. */
+.marker-chip-link {
+  cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 600;
+  display: inline-flex; align-items: center; gap: 4px;
+  border-color: var(--accent); color: var(--accent);
+}
+.marker-chip-link:hover { background: var(--accent-soft); }
+.marker-chip-caret { font-weight: 700; opacity: 0.7; }
+
+/* Provenance list: one row per reading, with the report it was read out of. */
+.prov-list { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+.prov-row {
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 10px 12px; background: var(--panel-2);
+}
+.prov-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.prov-date { font-weight: 600; font-size: 15px; }
+.prov-value { font-weight: 600; font-size: 15px; color: var(--text-secondary); }
+.prov-source { font-size: 13.5px; color: var(--text-secondary); margin-top: 4px; word-break: break-word; }
+.prov-dim { color: var(--muted); }
+/* The reading's own date disagreeing with its source report — the case that
+   makes an analysis cite a date no test was taken on. */
+.prov-mismatch {
+  font-size: 13.5px; line-height: 1.5; margin-top: 6px; padding: 8px 10px;
+  border-radius: var(--radius-sm); background: var(--low-soft);
+  border-left: 3px solid var(--low); color: var(--text-primary);
+}
+.prov-actions { margin-top: 8px; }
+
 /* ---------- settings page ---------- */
 /* The page is grouped by intent: work that needs a person, then the one setting
    in daily use, then privacy, then expert tools folded away. These styles carry
