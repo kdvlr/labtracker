@@ -1653,6 +1653,43 @@ def commit_results(req: CommitReq, request: Request):
         _require_member(conn, request, req.member_id)
         types = {t["id"]: t for t in _test_types(conn)}
         member = conn.execute("SELECT * FROM members WHERE id = ?", (req.member_id,)).fetchone()
+
+        # The document and the member arrive as two independent fields, and
+        # nothing used to check they agreed — so a review committed while the
+        # member selector pointed elsewhere wrote one person's report onto
+        # another's record, with the results still linked to the original PDF.
+        # That is how 40 of Kiran's readings ended up on his son's profile.
+        #
+        # An unassigned document is fine: committing it is what assigns it.
+        if req.document_id:
+            doc = conn.execute(
+                "SELECT member_id, extraction FROM documents WHERE id = ?", (req.document_id,)
+            ).fetchone()
+            if not doc:
+                raise HTTPException(404, "Document not found")
+            if doc["member_id"] and doc["member_id"] != req.member_id:
+                owner = conn.execute(
+                    "SELECT name FROM members WHERE id = ?", (doc["member_id"],)
+                ).fetchone()
+                raise HTTPException(
+                    400,
+                    f"This report belongs to {owner['name'] if owner else 'another profile'}. "
+                    f"Reassign the report first if it is filed under the wrong person.",
+                )
+            # Defence in depth: the same name check the upload path and
+            # auto-import use, so an unassigned report cannot be committed to
+            # someone the report itself names as a different patient.
+            if member and doc["extraction"]:
+                try:
+                    p_name = json.loads(doc["extraction"]).get("patient_name") or ""
+                except Exception:
+                    p_name = ""
+                if p_name and not match_patient_name(member["name"] or "", p_name):
+                    raise HTTPException(
+                        400,
+                        f"This report names '{p_name}', but you are saving it to "
+                        f"'{member['name']}'. Check the profile before saving.",
+                    )
         m_sex = member["sex"] if member else None
         # Age at the draw date, not today — a range should reflect who they were
         # when the blood was taken.
