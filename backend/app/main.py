@@ -1308,15 +1308,31 @@ def reassign_document(doc_id: int, req: ReassignReq, request: Request):
             raise HTTPException(404, "Document not found")
         if not conn.execute("SELECT 1 FROM members WHERE id = ?", (req.member_id,)).fetchone():
             raise HTTPException(404, "Member not found")
+        # Whose analysis is now wrong is decided by whose RESULTS move, not by
+        # who the document was filed under — those can differ. When a document
+        # already belonged to the destination and only its results were sitting
+        # on someone else, clearing "the document's previous owner" cleared the
+        # destination's cache and left the stale one untouched: exactly the
+        # profile still describing another person's readings.
+        affected = {
+            r["member_id"] for r in conn.execute(
+                "SELECT DISTINCT member_id FROM results WHERE document_id = ?", (doc_id,)
+            ).fetchall() if r["member_id"] is not None
+        }
         old_doc = conn.execute("SELECT member_id FROM documents WHERE id = ?", (doc_id,)).fetchone()
-        old_member_id = old_doc["member_id"] if old_doc else None
+        if old_doc and old_doc["member_id"]:
+            affected.add(old_doc["member_id"])
+        affected.add(req.member_id)
 
         moved = conn.execute(
             "UPDATE results SET member_id = ? WHERE document_id = ?", (req.member_id, doc_id)
         ).rowcount
         conn.execute("UPDATE documents SET member_id = ? WHERE id = ?", (req.member_id, doc_id))
-        if old_member_id:
-            conn.execute("DELETE FROM member_analyses WHERE member_id IN (?, ?)", (old_member_id, req.member_id))
+        if affected:
+            conn.execute(
+                f"DELETE FROM member_analyses WHERE member_id IN ({','.join('?' * len(affected))})",
+                tuple(affected),
+            )
         conn.commit()
         return {"ok": True, "moved": moved}
     finally:
