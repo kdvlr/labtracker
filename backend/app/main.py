@@ -2289,6 +2289,11 @@ def delete_result(result_id: int, request: Request):
             raise HTTPException(404, "Not found")
         _require_member(conn, request, row["member_id"])
         conn.execute("DELETE FROM results WHERE id = ?", (result_id,))
+        # Drop the cached analysis so it regenerates, consistent with every other
+        # path that mutates results (member/document delete, reassign, commit).
+        # The staleness fingerprint would catch this on next view regardless, but
+        # this keeps the delete path from being the lone exception.
+        conn.execute("DELETE FROM member_analyses WHERE member_id = ?", (row["member_id"],))
         conn.commit()
         return {"ok": True}
     finally:
