@@ -834,6 +834,49 @@ textarea { resize: vertical; }
 }
 
 /* Collapsible groups on settings */
+/* ---------- settings page ---------- */
+/* The page is grouped by intent: work that needs a person, then the one setting
+   in daily use, then privacy, then expert tools folded away. These styles carry
+   that hierarchy — nested sections read as subordinate, not as more top-level
+   noise. */
+.settings-note { font-size: 14px; line-height: 1.55; color: var(--text-secondary); margin: 0 0 12px; }
+.field-hint { font-size: 13px; color: var(--muted); margin-top: 4px; line-height: 1.45; }
+.settings-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+
+/* A stored prompt silently overrides the one shipped in the app, so future
+   improvements never reach it. Amber: a caveat to understand, not an error. */
+.settings-warn {
+  font-size: 14px; line-height: 1.55; color: var(--text-primary);
+  background: var(--low-soft); border: 1px solid var(--border);
+  border-left: 4px solid var(--low);
+  border-radius: var(--radius-sm); padding: 12px 14px; margin-bottom: 14px;
+}
+
+/* One provider's key + model. The active one is called out; the others sit
+   inside a closed disclosure so the page shows two fields, not six. */
+.provider-block {
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 14px 16px; margin: 12px 0; background: var(--panel);
+}
+.provider-active { border-left: 4px solid var(--accent); background: var(--accent-soft); }
+.provider-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.provider-name { font-weight: 600; font-size: 15px; }
+
+.prompt-textarea {
+  width: 100%; height: 220px; margin-top: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px; line-height: 1.5; background: var(--panel-2);
+}
+
+/* Nested sections: tighter and flatter than a top-level card so the depth is
+   legible at a glance. */
+.card .card { box-shadow: none; margin-bottom: 10px; }
+.card .card > .card-header { font-size: 14.5px; padding: 10px 14px; }
+
+.settings-about { margin: 24px 0 8px; font-size: 13px; color: var(--muted); }
+.settings-sha { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600; color: var(--accent); }
+.install-card { max-width: 560px; margin-top: 20px; border-left: 5px solid var(--accent); background: var(--accent-soft); }
+
 .settings-category-card {
   margin-bottom: 16px;
 }

@@ -2296,7 +2296,11 @@ function renderManualEntry(main) {
 
 function createCollapsible(title, count, contentEl, defaultOpen = false) {
   const arrow = el("span", { style: "transition: transform 0.2s ease; margin-right: 8px; display: inline-block;" }, defaultOpen ? "▼" : "▶");
-  const countBadge = el("span", { class: "pill", style: "background: var(--page-tint); color: var(--text-secondary); margin-left: auto;" }, String(count));
+  // No badge rather than an empty pill: a section whose state needs no summary
+  // (0, "", null) should show nothing at all.
+  const countBadge = (count === 0 || count === "" || count == null)
+    ? null
+    : el("span", { class: "pill", style: "background: var(--page-tint); color: var(--text-secondary); margin-left: auto;" }, String(count));
   
   const header = el("div", { 
     class: "card-header", 
@@ -3892,172 +3896,217 @@ async function renderSettings(main) {
   document.querySelectorAll('[data-view="settings"]').forEach((b) => b.classList.add("active"));
   const s = await api("/settings");
   const categories = (await api("/categories").catch(() => ({ categories: [] }))).categories || [];
+
   main.append(el("div", { class: "page-head" }, el("div", {}, [
     el("h1", { class: "page-title" }, "Settings"),
-    el("p", { class: "page-sub" }, "Configure AI providers, system prompts, and privacy settings."),
+    el("p", { class: "page-sub" }, "Admin for this install — AI provider, privacy, and the categorisation queue."),
   ])));
 
-  // 1. AI Configuration Collapsible
-  const aiConfigContent = el("div");
-  
+  // ---- 1. Work that needs a person -------------------------------------
+  // Top of the page, and open when there is a backlog: it is the only section
+  // that represents a task rather than configuration.
+  const pendingCount = state.testTypes.filter((t) => !t.category || t.category === "Other").length;
+  const queueContent = buildCategorizationQueue(categories);
+  const queueSection = createCollapsible(
+    "Uncategorised tests",
+    pendingCount === 0 ? "All sorted" : `${pendingCount} waiting`,
+    queueContent,
+    pendingCount > 0,
+  );
+
+  // ---- 2. AI provider ---------------------------------------------------
+  // Only the ACTIVE provider's key and model are shown up front. This page used
+  // to list all three providers' keys and models at once — six fields when two
+  // apply — so the setting actually in use was buried among four that weren't.
+  const aiContent = el("div");
+  const fields = {};
+  const PROVIDERS = {
+    anthropic: { label: "Anthropic", keyPh: "sk-ant-...", modelPh: "claude-opus-4-8" },
+    openai:    { label: "OpenAI",    keyPh: "sk-...",     modelPh: "gpt-4o" },
+    gemini:    { label: "Gemini",    keyPh: "AIza...",    modelPh: "gemini-2.0-flash" },
+  };
+  const activeProvider = s.ai_provider
+    || (s.has_key_gemini ? "gemini" : (s.has_key_openai ? "openai" : "anthropic"));
+
   const providerSel = el("select");
-  const activeProvider = s.ai_provider || (s.has_key_gemini ? "gemini" : (s.has_key_openai ? "openai" : "anthropic"));
-  for (const p of ["anthropic", "openai", "gemini"]) {
-    providerSel.append(el("option", { value: p, ...(activeProvider === p ? { selected: "" } : {}) }, p[0].toUpperCase() + p.slice(1)));
+  for (const p of Object.keys(PROVIDERS)) {
+    providerSel.append(el("option", { value: p, ...(activeProvider === p ? { selected: "" } : {}) },
+      PROVIDERS[p].label));
   }
 
-  const fields = {};
-  const mk = (label, key, ph, isSet) => {
-    const inp = el("input", { type: "text", placeholder: ph });
-    fields[key] = inp;
-    
-    const statusText = isSet ? "Set" : "Not Set";
-    const statusClass = isSet ? "pill-ok" : "pill-L";
-    
-    return el("div", { class: "field" }, [
-      el("div", { style: "display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;" }, [
-        el("label", { style: "margin: 0;" }, label),
-        el("span", { class: "pill " + statusClass, style: "font-size: 11px; padding: 2px 6px;" }, statusText)
+  // One provider's two fields. Every provider's inputs stay registered in
+  // `fields`, so switching provider and pasting a key in the same visit still
+  // saves both.
+  const providerFields = (p, active) => {
+    const cfg = PROVIDERS[p];
+    const hasKey = s["has_key_" + p];
+    const keyInput = el("input", {
+      type: "password", autocomplete: "off",
+      placeholder: hasKey ? "•••••• saved — leave blank to keep" : cfg.keyPh,
+    });
+    fields["ai_key_" + p] = keyInput;
+    const modelInput = el("input", { type: "text", value: s["ai_model_" + p] || "", placeholder: cfg.modelPh });
+    fields["ai_model_" + p] = modelInput;
+    return el("div", { class: active ? "provider-block provider-active" : "provider-block" }, [
+      el("div", { class: "provider-head" }, [
+        el("span", { class: "provider-name" }, cfg.label),
+        el("span", { class: "pill " + (hasKey ? "pill-green" : "pill-grey") }, hasKey ? "Key saved" : "No key"),
       ]),
-      inp
+      el("div", { class: "field" }, [el("label", {}, "API key"), keyInput]),
+      el("div", { class: "field" }, [
+        el("label", {}, "Model"),
+        modelInput,
+        el("div", { class: "field-hint" }, "Leave blank to use the default (" + cfg.modelPh + ")."),
+      ]),
     ]);
   };
 
-  aiConfigContent.append(
-    el("div", { class: "field" }, [el("label", {}, "Active provider"), providerSel]),
-    el("div", { class: "category-label", style: "margin-top:20px" }, "API Keys"),
-    mk("Anthropic key", "ai_key_anthropic", s.has_key_anthropic ? "•••••• (leave blank to keep)" : "sk-ant-...", s.has_key_anthropic),
-    mk("OpenAI key", "ai_key_openai", s.has_key_openai ? "•••••• (leave blank to keep)" : "sk-...", s.has_key_openai),
-    mk("Gemini key", "ai_key_gemini", s.has_key_gemini ? "•••••• (leave blank to keep)" : "AIza...", s.has_key_gemini),
-    el("div", { class: "category-label", style: "margin-top:20px" }, "Models (optional overrides)"),
-    (() => { const i = el("input", { type: "text", value: s.ai_model_anthropic || "", placeholder: "claude-opus-4-8" }); fields.ai_model_anthropic = i; return el("div", { class: "field" }, [el("label", {}, "Anthropic model"), i]); })(),
-    (() => { const i = el("input", { type: "text", value: s.ai_model_openai || "", placeholder: "gpt-4o" }); fields.ai_model_openai = i; return el("div", { class: "field" }, [el("label", {}, "OpenAI model"), i]); })(),
-    (() => { const i = el("input", { type: "text", value: s.ai_model_gemini || "", placeholder: "gemini-2.0-flash" }); fields.ai_model_gemini = i; return el("div", { class: "field" }, [el("label", {}, "Gemini model"), i]); })(),
-    el("button", { class: "btn btn-primary", style: "margin-top:8px", onclick: async () => {
+  const activeBlock = el("div");
+  const otherBlocks = el("div");
+  const paintProviders = () => {
+    activeBlock.innerHTML = "";
+    otherBlocks.innerHTML = "";
+    const chosen = providerSel.value;
+    activeBlock.append(providerFields(chosen, true));
+    for (const p of Object.keys(PROVIDERS)) {
+      if (p !== chosen) otherBlocks.append(providerFields(p, false));
+    }
+  };
+  providerSel.addEventListener("change", paintProviders);
+  paintProviders();
+
+  const saveAiBtn = el("button", { class: "btn btn-primary", onclick: async () => {
+    saveAiBtn.disabled = true;
+    try {
       const body = { ai_provider: providerSel.value };
       for (const [k, inp] of Object.entries(fields)) if (inp.value.trim()) body[k] = inp.value.trim();
       await api("/settings", { method: "PUT", body });
-      toast("Settings saved");
+      toast("AI settings saved");
       render();
-    } }, "Save settings")
+    } catch (e) { toast(e.message); } finally { saveAiBtn.disabled = false; }
+  } }, "Save AI settings");
+
+  aiContent.append(
+    el("div", { class: "field" }, [
+      el("label", {}, "Provider in use"),
+      providerSel,
+      el("div", { class: "field-hint" }, "Every extraction and analysis runs through this provider."),
+    ]),
+    activeBlock,
+    createCollapsible("Other providers", "not in use", otherBlocks, false),
+    el("div", { class: "settings-actions" }, saveAiBtn),
   );
 
-  if (s.commit_sha) {
-    aiConfigContent.append(
-      el("div", { style: "margin-top: 24px; padding-top: 14px; border-top: 1px solid var(--border); font-size: 12.5px; color: var(--muted); display: flex; align-items: center; gap: 6px;" }, [
-        "Last Deployed Build:",
-        el("a", {
-          href: `https://github.com/kdvlr/labtracker/commit/${s.commit_sha}`,
-          target: "_blank",
-          style: "font-family: monospace; font-weight: 600; text-decoration: underline; color: var(--accent);"
-        }, s.commit_sha.slice(0, 7))
-      ])
-    );
+  const aiSection = createCollapsible("AI provider", PROVIDERS[activeProvider].label, aiContent, true);
+
+  // ---- 3. Privacy -------------------------------------------------------
+  const privacyContent = el("div");
+  const privacyCard = await renderPrivacyCard();
+  while (privacyCard.firstChild) privacyContent.appendChild(privacyCard.firstChild);
+  const privacySection = createCollapsible(
+    "Privacy & security", state.access.has_pin ? "PIN set" : "No PIN", privacyContent, false);
+
+  // ---- 4. Advanced ------------------------------------------------------
+  // Prompts and the evaluation suite are expert tools that can quietly degrade
+  // every AI feature in the app. Grouped and closed behind a plain warning,
+  // rather than sitting at the same level as "which provider am I using".
+  const advancedContent = el("div");
+  advancedContent.append(el("p", { class: "settings-note" },
+    "These change how the AI behaves across the whole app. The defaults are tuned — you can leave this section alone."));
+
+  const customised = Array.isArray(s.prompts_customised) ? s.prompts_customised : [];
+  const promptsContent = el("div");
+  if (customised.length) {
+    // The consequence people don't expect: a saved prompt wins over the one in
+    // code permanently, so later improvements never reach it.
+    promptsContent.append(el("div", { class: "settings-warn" },
+      customised.length + " prompt" + (customised.length === 1 ? " is" : "s are") +
+      " customised and stored in the database. A stored prompt overrides the one shipped in the app, " +
+      "so improvements from future updates will not apply to it. Reset it to defaults to follow the app again."));
   }
 
-  // 2. AI System Prompts Collapsible
-  const promptsContent = el("div");
   const promptsFields = {};
-  const mkPrompt = (label, key, value) => {
-    const ta = el("textarea", { 
-      style: "width: 100%; height: 160px; font-family: monospace; font-size: 13px; line-height: 1.5; background: var(--panel-2); margin-top: 4px;", 
-      placeholder: "System prompt..." 
-    });
-    ta.value = value || "";
-    promptsFields[key] = ta;
-    return el("div", { class: "field", style: "margin-bottom:16px;" }, [
-      el("label", { style: "font-weight:700;" }, label), 
-      ta
-    ]);
+  const PROMPT_META = {
+    prompt_extraction_system:      ["Reading lab reports", "Turns an uploaded PDF into structured results."],
+    prompt_health_analysis:        ["Full health analysis", "The whole-history summary, concerns and cross-panel patterns."],
+    prompt_biomarker_personalized: ["Marker explanation (personalised)", "Explains one marker using this person's history."],
+    prompt_biomarker_standard:     ["Marker explanation (general)", "Explains one marker with no personal data."],
+    prompt_qa_system:              ["Ask-a-question assistant", "Answers free-text questions about results."],
   };
+  for (const [key, meta] of Object.entries(PROMPT_META)) {
+    const ta = el("textarea", { class: "prompt-textarea", placeholder: "System prompt..." });
+    ta.value = s[key] || "";
+    promptsFields[key] = ta;
+    // Each prompt collapses individually: five 160px monospace boxes open at
+    // once was most of what made this page feel like a wall of text.
+    const body = el("div", {}, [el("p", { class: "settings-note" }, meta[1]), ta]);
+    promptsContent.append(createCollapsible(
+      meta[0], customised.includes(key) ? "customised" : "default", body, false));
+  }
 
   const savePromptsBtn = el("button", { class: "btn btn-primary", onclick: async () => {
     savePromptsBtn.disabled = true;
     try {
       const body = {};
-      for (const [k, ta] of Object.entries(promptsFields)) {
-        body[k] = ta.value;
-      }
+      for (const [k, ta] of Object.entries(promptsFields)) body[k] = ta.value;
       await api("/settings", { method: "PUT", body });
-      toast("AI Prompts saved");
+      toast("Prompts saved");
       render();
-    } catch (e) {
-      toast(e.message);
-    } finally {
-      savePromptsBtn.disabled = false;
-    }
+    } catch (e) { toast(e.message); } finally { savePromptsBtn.disabled = false; }
   } }, "Save prompts");
 
-  const resetPromptsBtn = el("button", { class: "btn btn-quiet", style: "margin-left: 8px;", onclick: async () => {
-    if (!window.confirm("Reset all prompts to system defaults? Any custom modifications will be lost.")) return;
+  const resetPromptsBtn = el("button", { class: "btn btn-quiet", onclick: async () => {
+    if (!window.confirm("Reset all prompts to the app's defaults? Any custom wording will be lost.")) return;
     resetPromptsBtn.disabled = true;
     try {
       const defaults = await api("/settings/defaults");
       for (const [k, value] of Object.entries(defaults)) {
-        if (promptsFields[k]) {
-          promptsFields[k].value = value;
-        }
+        if (promptsFields[k]) promptsFields[k].value = value;
       }
-      toast("Prompts reset to defaults (click Save prompts to write to database)");
-    } catch (e) {
-      toast("Failed to reset prompts: " + e.message);
-    } finally {
-      resetPromptsBtn.disabled = false;
-    }
-  } }, "Reset to Defaults");
+      toast("Defaults loaded — press Save prompts to apply");
+    } catch (e) { toast("Couldn't reset: " + e.message); } finally { resetPromptsBtn.disabled = false; }
+  } }, "Reset to defaults");
 
-  promptsContent.append(
-    mkPrompt("Document Extraction Prompt", "prompt_extraction_system", s.prompt_extraction_system),
-    mkPrompt("AI Q&A Assistant Prompt", "prompt_qa_system", s.prompt_qa_system),
-    mkPrompt("Biomarker Explanation (Personalized)", "prompt_biomarker_personalized", s.prompt_biomarker_personalized),
-    mkPrompt("Biomarker Explanation (Standard)", "prompt_biomarker_standard", s.prompt_biomarker_standard),
-    mkPrompt("Full Health Analysis", "prompt_health_analysis", s.prompt_health_analysis),
-    el("div", { style: "display: flex;" }, [savePromptsBtn, resetPromptsBtn])
-  );
-
-  // 3. Privacy & Security Collapsible
-  const privacyContent = el("div");
-  // We can just construct it, but to keep existing renderPrivacyCard intact, we append the generated card's children directly to privacyContent!
-  const privacyCard = await renderPrivacyCard();
-  while (privacyCard.firstChild) {
-    privacyContent.appendChild(privacyCard.firstChild);
-  }
-
-  // 4. Categorization Queue — the admin work queue for tests still in "Other".
-  const pendingCount = state.testTypes.filter((t) => !t.category || t.category === "Other").length;
-  const queueContent = buildCategorizationQueue(categories);
-
-  // Wrap all sections in collapsible panels. The queue opens automatically and
-  // shows its backlog count in the header, so there's an obvious place to work.
-  const aiSection = createCollapsible("AI Provider & Key Configuration", 1, aiConfigContent, true);
-  const promptsSection = createCollapsible("AI System Prompts", 4, promptsContent, false);
-  const privacySection = createCollapsible("Privacy & Security", state.access.has_pin ? "Protected" : "Public", privacyContent, false);
-  const queueSection = createCollapsible("Categorization Queue", pendingCount === 0 ? "Clear" : pendingCount, queueContent, pendingCount > 0);
+  promptsContent.append(el("div", { class: "settings-actions" }, [savePromptsBtn, resetPromptsBtn]));
+  advancedContent.append(createCollapsible(
+    "AI prompts", customised.length ? customised.length + " customised" : "all default", promptsContent, false));
 
   const evalContent = el("div");
   buildModelEvaluationPanel(evalContent);
-  const evalSection = createCollapsible("Model Evaluation Suite", "Active", evalContent, false);
+  advancedContent.append(createCollapsible("Model evaluation suite", "", evalContent, false));
 
-  main.append(aiSection, promptsSection, privacySection, queueSection, evalSection);
+  const advancedSection = createCollapsible("Advanced", "", advancedContent, false);
 
-  // PWA Add to Home Screen card
+  main.append(queueSection, aiSection, privacySection, advancedSection);
+
+  // ---- About ------------------------------------------------------------
+  // Was buried at the bottom of the AI section, which it has nothing to do with.
+  if (s.commit_sha) {
+    main.append(el("div", { class: "settings-about" }, [
+      "Running build ",
+      el("a", {
+        href: "https://github.com/kdvlr/labtracker/commit/" + s.commit_sha,
+        target: "_blank", rel: "noopener", class: "settings-sha",
+      }, s.commit_sha.slice(0, 7)),
+    ]));
+  }
+
   if (window.deferredPrompt) {
-    const installCard = el("div", { class: "card", style: "max-width:560px; margin-top:20px; border-left:5px solid var(--accent); background:var(--accent-soft)" }, [
-      el("div", { class: "hh-name" }, "✨ Install Rakta Charitra"),
-      el("p", { class: "desc-text", style: "margin:8px 0 16px; color:var(--text-secondary); font-size:15px;" }, "Install this application on your device for fast access directly from your home screen and improved offline support."),
+    main.append(el("div", { class: "card install-card" }, [
+      el("div", { class: "hh-name" }, "Install Rakta Charitra"),
+      el("p", { class: "settings-note" }, "Add it to your home screen for faster access and better offline support."),
       el("button", { class: "btn btn-primary", onclick: async () => {
         const promptEvent = window.deferredPrompt;
         if (!promptEvent) return;
         promptEvent.prompt();
-        const { outcome } = await promptEvent.userChoice;
-        console.log(`User response to the install prompt: ${outcome}`);
+        await promptEvent.userChoice;
         window.deferredPrompt = null;
         render();
       } }, "Add to Home Screen"),
-    ]);
-    main.append(installCard);
+    ]));
   }
 }
+
 
 
 // ---------------- ask AI modal ----------------

@@ -2372,6 +2372,16 @@ def get_settings(request: Request):
             k = f"ai_key_{p}"
             out[f"has_key_{p}"] = bool(out.pop(k, None))
         
+        # Which prompts are genuinely overridden in the database, recorded BEFORE
+        # the defaults are filled in — afterwards the two are indistinguishable.
+        # This matters more than it looks: a saved prompt permanently shadows the
+        # one in code, so improvements shipped in an update silently never reach
+        # a prompt someone once edited. The UI surfaces this.
+        prompt_keys = ("prompt_extraction_system", "prompt_qa_system",
+                       "prompt_biomarker_personalized", "prompt_biomarker_standard",
+                       "prompt_health_analysis")
+        out["prompts_customised"] = [k for k in prompt_keys if (out.get(k) or "").strip()]
+
         # default prompts fallback if not configured in settings
         out.setdefault("prompt_extraction_system", ai.EXTRACTION_SYSTEM)
         out.setdefault("prompt_qa_system", ai.QA_SYSTEM)
