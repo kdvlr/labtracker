@@ -258,6 +258,53 @@ async function api(path, opts = {}) {
   return res.status === 204 ? null : res.json();
 }
 
+// Open a stored report in a new tab.
+//
+// A plain <a href="/api/documents/N/file" target="_blank"> cannot work here: the
+// unlock token rides in the X-Unlock *header*, and a browser navigation sends no
+// custom headers. The server then sees an unauthenticated request, and because a
+// private member's documents 404 rather than 403 (so a locked device cannot
+// confirm a profile exists), every report on a private profile opened as
+// "Not found".
+//
+// So fetch it with the header, hand the browser a blob instead, and keep the
+// token out of the URL entirely — a query-string token would leak into history.
+async function openDocumentFile(docId, pageNumber) {
+  // Opened synchronously, before any await: a window.open() after an await is
+  // no longer trusted as user-initiated and gets blocked.
+  const win = window.open("", "_blank");
+  try {
+    const tok = getUnlockToken();
+    const res = await fetch(`/api/documents/${docId}/file`, {
+      headers: tok ? { "X-Unlock": tok } : {},
+    });
+    if (!res.ok) {
+      // A 404 here is deliberately ambiguous on the server — a locked device
+      // gets the same answer as a missing file, so a private profile is never
+      // confirmed to exist. Passing the server's bare "Not found" through is
+      // what made this unreadable, so say what the user can actually do about
+      // it. Other statuses keep the server's message, which is informative.
+      if (res.status === 404) {
+        throw new Error(getUnlockToken()
+          ? "That report isn't available. It may have been deleted, or the file is missing from storage."
+          : "This device is locked. Unlock it to open reports for private profiles.");
+      }
+      let msg = `Couldn't open the report (${res.status})`;
+      try { msg = (await res.json()).detail || msg; } catch {}
+      throw new Error(msg);
+    }
+    const url = URL.createObjectURL(await res.blob());
+    // #page=N is honoured by the built-in PDF viewers.
+    const target = pageNumber ? `${url}#page=${pageNumber}` : url;
+    if (win) win.location = target; else window.open(target, "_blank");
+    // Revoked once the tab has loaded it; revoking immediately can race the load.
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (e) {
+    if (win) win.close();
+    toast(e.message);
+  }
+}
+
 function toast(msg) {
   const t = $("#toast");
   t.textContent = msg;
@@ -2420,9 +2467,9 @@ function renderReview(mount, doc, memberId, result, main, errorMsg, isLegacy) {
       // Page link helper
       const pageLink = item.page_number 
         ? el("a", { 
-          href: `/api/documents/${doc.id}/file#page=${item.page_number}`, 
-          target: "_blank", 
-          class: "pill pill-ok", 
+          href: "#",
+          onclick: (e) => { e.preventDefault(); openDocumentFile(doc.id, item.page_number); },
+          class: "pill pill-ok",
           style: "font-size: 11px; padding: 2px 6px; margin-left: 8px; text-decoration: none; display: inline-block;" 
         }, `Page ${item.page_number}`)
         : null;
@@ -3001,8 +3048,8 @@ async function renderDocuments(main) {
         const docActions = [
           // Opens in its own tab instead of downloading, so reading a report
           // doesn't leave a file to clean up afterwards.
-          el("a", { class: "btn btn-sm", href: `/api/documents/${d.id}/file`,
-                    target: "_blank", rel: "noopener" }, "Open PDF"),
+          el("button", { class: "btn btn-sm",
+                         onclick: () => openDocumentFile(d.id) }, "Open PDF"),
           el("button", { class: "btn btn-sm", onclick: () => openReview(d) },
              needs ? `Review ${needs}` : "Results"),
           el("button", { class: "btn btn-sm", onclick: () => openReassignDoc(d) }, "Reassign"),
@@ -3110,10 +3157,9 @@ async function renderReviewDoc(main) {
     }
   }, "Reassign");
   
-  const openFileBtn = el("a", { 
-    class: "btn btn-sm", 
-    href: `/api/documents/${doc.id}/file`, 
-    target: "_blank",
+  const openFileBtn = el("button", {
+    class: "btn btn-sm",
+    onclick: () => openDocumentFile(doc.id),
     style: "display: inline-flex; align-items: center; gap: 4px;"
   }, [el("span", {}, "📄"), "Open Original File"]);
   
