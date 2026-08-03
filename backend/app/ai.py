@@ -92,6 +92,11 @@ HOW TO WEIGH THE DATA (this ordering matters):
    - LONG-TERM: the change across the entire span of history available.
    Example: LDL that fell steadily over five years (long-term improving) but jumped in the most recent test (short-term worsening) deserves attention BECAUSE of the recent turn. Conversely, a value mildly out of range for years but stable and improving lately is lower priority.
 
+NOT EVERY "LATEST" VALUE IS CURRENT. Markers are drawn on different days, so a list of latest values is NOT a snapshot of one moment. Any marker whose most recent reading is meaningfully older than the newest labs on file is tagged "NOT CURRENT" with its age. Treat those as history, not as the present:
+- Never use a NOT CURRENT marker to reassure about, explain, or qualify a current one. "Her microalbumin is raised but her kidney filtration is excellent" is misleading when the filtration result is four months older than the urine result — the older test simply does not describe the same period.
+- If an older marker is genuinely relevant to a current finding, you MUST say how old it is in the same sentence, e.g. "eGFR was normal, though that was four months ago and has not been rechecked since."
+- Where a stale marker would be the natural test to confirm or rule out a current finding, that belongs in data_gaps as a recheck worth requesting.
+
 PRIORITISATION: rank problems by (a) how far the LATEST value is out of range and how clinically serious it is, then (b) the recent (short-term) trajectory — a recent adverse turn raises priority, a recent improvement of a long-standing issue lowers it. A marker getting worse right now outranks one that has been stably mildly-abnormal forever.
 
 Also:

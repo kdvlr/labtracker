@@ -685,6 +685,19 @@ def _marker_history_lines(conn, member_id: int, tt_ids: Optional[list] = None,
             v += f"({p['flag']})"
         return v
 
+    # The newest collection date anywhere in this set — the reference point for
+    # "current". A marker whose own latest reading is much older than this is
+    # not part of the present picture, however recent it looks sitting in a list
+    # of latest values.
+    from datetime import date as _d
+    def _parse(s):
+        try:
+            return _d.fromisoformat(str(s)[:10])
+        except (ValueError, TypeError):
+            return None
+    all_dates = [d for d in (_parse(r["taken_at"]) for r in rows) if d]
+    newest_overall = max(all_dates) if all_dates else None
+
     lines, by_id = [], {}
     for tid, points in hist.items():
         name = points[0]["name"]
@@ -733,9 +746,23 @@ def _marker_history_lines(conn, member_id: int, tt_ids: Optional[list] = None,
                     drift = (f"  [WITHIN-RANGE DRIFT: {p0:.0f}% → {p1:.0f}% of range, "
                              f"{'rising' if p1 > p0 else 'falling'}, never flagged]")
 
+        # How current this marker actually is, relative to the newest draw on
+        # file. Without this the model reads a list of "LATEST" values as one
+        # snapshot and pairs a fresh result with a months-old one as though they
+        # described the same day — e.g. reassuring about kidney function from an
+        # eGFR taken four months before the urine result it is explaining.
+        staleness = ""
+        latest_date = _parse(latest["taken_at"])
+        if newest_overall and latest_date:
+            days = (newest_overall - latest_date).days
+            if days >= 60:
+                months = round(days / 30.44)
+                staleness = (f"  [NOT CURRENT: {months} month{'s' if months != 1 else ''} older than "
+                             f"the most recent labs ({newest_overall.isoformat()})]")
+
         cat = f"[{points[0]['category'] or 'Other'}] " if include_category else ""
         head = (f"{cat}{name}{ref} — LATEST {str(latest['taken_at'])[:10]}: "
-                f"{fmt_val(latest)} ({status_by_id.get(tid, '')}){drift}")
+                f"{fmt_val(latest)} ({status_by_id.get(tid, '')}){staleness}{drift}")
 
         # Only worth the tokens when the lab's unit actually differs from the
         # canonical one — otherwise "reported as" restates the same number.
@@ -1301,6 +1328,25 @@ def _process_upload_in_background(doc_id: int) -> None:
             _rename_stored_file(conn, doc_id)
         except Exception:
             pass
+
+        # Refresh the member's health summary — but only once the whole batch is
+        # in. Someone uploading five reports would otherwise pay for five full
+        # analyses and see four of them immediately superseded, so this waits
+        # until nothing else is still being read for that person.
+        member_id = row["member_id"]
+        if member_id:
+            still_reading = conn.execute(
+                "SELECT COUNT(*) c FROM documents WHERE member_id = ? AND status = 'processing' AND id != ?",
+                (member_id, doc_id),
+            ).fetchone()["c"]
+            if not still_reading:
+                try:
+                    _build_member_analysis(conn, member_id)
+                    print(f"[upload] refreshed health summary for member {member_id}", flush=True)
+                except Exception as e:
+                    # Never fail the import over this. The results are saved; the
+                    # summary just stays flagged stale and regenerates on demand.
+                    print(f"[upload] summary refresh skipped for member {member_id}: {e}", flush=True)
     finally:
         conn.close()
 
@@ -2292,35 +2338,48 @@ def get_member_analysis(member_id: int, request: Request):
         conn.close()
 
 
+def _build_member_analysis(conn, member_id: int):
+    """Generate the whole-member analysis and cache it. Returns the payload.
+
+    Raises ValueError when there is nothing to analyse, and lets AI errors
+    propagate so callers can decide what to do — the endpoint turns them into
+    HTTP errors, the background caller swallows them.
+    """
+    body, results_hash, marker_count = _analysis_inputs(conn, member_id)
+    if not body:
+        raise ValueError("No results to analyze yet")
+    provider, model, key = _ai_config(conn)
+    system_prompt = _get_setting(conn, "prompt_health_analysis", ai.HEALTH_ANALYSIS_SYSTEM)
+    text = ai.chat(provider, model, key, system_prompt, body)
+    analysis = ai._extract_json(text)
+    conn.execute(
+        """INSERT INTO member_analyses (member_id, analysis, results_hash, generated_at)
+           VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+           ON CONFLICT(member_id) DO UPDATE SET
+             analysis = excluded.analysis, results_hash = excluded.results_hash,
+             generated_at = excluded.generated_at""",
+        (member_id, json.dumps(analysis), results_hash),
+    )
+    conn.commit()
+    row = conn.execute("SELECT generated_at FROM member_analyses WHERE member_id = ?", (member_id,)).fetchone()
+    return {"analysis": analysis, "generated_at": row["generated_at"],
+            "stale": False, "marker_count": marker_count}
+
+
 @app.post("/api/members/{member_id}/analysis")
 def generate_member_analysis(member_id: int, request: Request):
     """Generate (or regenerate) the whole-member analysis and cache it."""
     conn = get_db()
     try:
         _require_member(conn, request, member_id)
-        body, results_hash, marker_count = _analysis_inputs(conn, member_id)
-        if not body:
-            raise HTTPException(400, "No results to analyze yet")
-        provider, model, key = _ai_config(conn)
-        system_prompt = _get_setting(conn, "prompt_health_analysis", ai.HEALTH_ANALYSIS_SYSTEM)
         try:
-            text = ai.chat(provider, model, key, system_prompt, body)
-            analysis = ai._extract_json(text)
+            return _build_member_analysis(conn, member_id)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
         except ai.AIError as e:
             raise HTTPException(400, str(e))
-        except (ValueError, KeyError) as e:
+        except KeyError as e:
             raise HTTPException(400, f"Could not parse AI analysis: {e}")
-        conn.execute(
-            """INSERT INTO member_analyses (member_id, analysis, results_hash, generated_at)
-               VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-               ON CONFLICT(member_id) DO UPDATE SET
-                 analysis = excluded.analysis, results_hash = excluded.results_hash,
-                 generated_at = excluded.generated_at""",
-            (member_id, json.dumps(analysis), results_hash),
-        )
-        conn.commit()
-        row = conn.execute("SELECT generated_at FROM member_analyses WHERE member_id = ?", (member_id,)).fetchone()
-        return {"analysis": analysis, "generated_at": row["generated_at"], "stale": False, "marker_count": marker_count}
     finally:
         conn.close()
 
