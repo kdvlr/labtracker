@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, BackgroundTasks
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -44,6 +44,19 @@ def _startup():
     conn = get_db()
     try:
         access.maybe_reset_pin(conn, DATA_DIR)
+        # Background extraction lives in this process, so a restart mid-read
+        # leaves a document stuck on 'processing' with nothing coming to finish
+        # it. Mark those as failed on boot: a failed report offers a Retry, a
+        # processing one just spins forever.
+        stuck = conn.execute(
+            """UPDATE documents SET status = 'failed',
+                   extraction = COALESCE(extraction, ?)
+               WHERE status = 'processing'""",
+            (json.dumps({"error": "Reading was interrupted when the app restarted. Retry to read it again."}),),
+        ).rowcount
+        if stuck:
+            conn.commit()
+            print(f"[startup] {stuck} document(s) were mid-read at shutdown; marked for retry.", flush=True)
     finally:
         conn.close()
 
@@ -983,233 +996,74 @@ def match_patient_name(member_name: str, patient_name: str) -> bool:
 @app.post("/api/documents")
 async def upload_document(
     request: Request,
+    background: BackgroundTasks,
     file: UploadFile = File(...),
     member_id: Optional[int] = Form(None),
 ):
+    """Store an uploaded report and hand the reading of it to a background task.
+
+    Uploading used to run the AI extraction inline, so the browser sat on the
+    POST for as long as the model took — tens of seconds on a short report and
+    several minutes on a long one, with nothing to show for it. That is a bad
+    thing to ask of anyone and a worse thing to ask of someone who is not sure
+    whether the app has frozen. The upload now returns as soon as the file is
+    safely on disk; the document appears immediately with status 'processing'
+    and fills in on its own.
+    """
     _guard = get_db()
     try:
         _require_member(_guard, request, member_id)
     finally:
         _guard.close()
+
     data = await file.read()
     if not data:
         raise HTTPException(400, "Empty file")
-    
+
     import hashlib
     file_hash = hashlib.sha256(data).hexdigest()
-    
-    # Check for duplicate file hash
-    _check_conn = get_db()
-    try:
-        existing = _check_conn.execute("SELECT id, filename FROM documents WHERE file_hash = ?", (file_hash,)).fetchone()
-        if existing:
-            if not request.query_params.get("force") == "true":
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"This file has already been uploaded as document #{existing['id']} ('{existing['filename']}')."
-                )
-    finally:
-        _check_conn.close()
 
-    mime = file.content_type or mimetypes.guess_type(file.filename or "")[0] or "application/octet-stream"
-    ext = Path(file.filename or "").suffix or mimetypes.guess_extension(mime) or ""
-    
     conn = get_db()
     try:
+        existing = conn.execute(
+            "SELECT id, filename FROM documents WHERE file_hash = ?", (file_hash,)
+        ).fetchone()
+        if existing and request.query_params.get("force") != "true":
+            raise HTTPException(
+                status_code=409,
+                detail=f"This file has already been uploaded as document #{existing['id']} ('{existing['filename']}').",
+            )
+
         member = None
         if member_id:
             member = conn.execute("SELECT * FROM members WHERE id = ?", (member_id,)).fetchone()
             if not member:
                 raise HTTPException(404, "Member not found")
-        
-        # 1. AI Extraction
-        sanitized_person_name = sanitize_name(member["name"]) if member else "unassigned"
-        member_dir = FILES_DIR / sanitized_person_name
+
+        mime = file.content_type or mimetypes.guess_type(file.filename or "")[0] or "application/octet-stream"
+        ext = Path(file.filename or "").suffix or mimetypes.guess_extension(mime) or ""
+
+        # Saved under a provisional name: the final Member_Month_Year name needs
+        # the report date, which is not known until the AI has read the file.
+        # _rename_stored_file fixes it up once extraction lands.
+        person = sanitize_name(member["name"]) if member else "unassigned"
+        member_dir = FILES_DIR / person
         member_dir.mkdir(parents=True, exist_ok=True)
+        provisional = f"{person}_Uploaded_{uuid.uuid4().hex[:8]}{ext}"
+        (member_dir / provisional).write_bytes(data)
+        stored_name = f"{person}/{provisional}"
 
-        provider, model, key = _ai_config(conn)
-        extraction_sys = _get_setting(conn, "prompt_extraction_system", ai.EXTRACTION_SYSTEM)
-        try:
-            parsed = ai.extract(provider, model, key, data, mime, system_prompt=extraction_sys)
-        except Exception as e:
-            error_msg = f"AI extraction failed: {str(e)}"
-            temp_filename = f"{sanitized_person_name}_Failed_{uuid.uuid4().hex[:8]}{ext}"
-            (member_dir / temp_filename).write_bytes(data)
-            stored_name = f"{sanitized_person_name}/{temp_filename}"
-
-            conn.execute(
-                """INSERT INTO documents (member_id, filename, stored_name, mime, size, status, extraction, file_hash)
-                   VALUES (?, ?, ?, ?, ?, 'failed', ?, ?)""",
-                (member_id, file.filename, stored_name, mime, len(data), json.dumps({"error": error_msg}), file_hash),
-            )
-            conn.commit()
-            raise HTTPException(400, error_msg)
-
-        patient_name = parsed.get("patient_name")
-        report_date = parsed.get("report_date")
-        lab_name = parsed.get("lab_name")
-
-        # 2. Check if selected name matches the report
-        if member:
-            if not match_patient_name(member["name"], patient_name):
-                error_msg = f"Patient name mismatch: Report belongs to '{patient_name or 'Unknown'}', but you selected '{member['name']}'."
-                temp_filename = f"{sanitized_person_name}_Failed_{uuid.uuid4().hex[:8]}{ext}"
-                (member_dir / temp_filename).write_bytes(data)
-                stored_name = f"{sanitized_person_name}/{temp_filename}"
-
-                conn.execute(
-                    """INSERT INTO documents (member_id, filename, stored_name, mime, size, status, extraction, file_hash)
-                       VALUES (?, ?, ?, ?, ?, 'failed', ?, ?)""",
-                    (member_id, file.filename, stored_name, mime, len(data), json.dumps({"error": error_msg}), file_hash),
-                )
-                conn.commit()
-                raise HTTPException(400, error_msg)
-
-        # 3. Organize in folders and rename appropriately with month/year and collision handling
-        
-        # Extract month and year
-        test_month = "UnknownMonth"
-        test_year = "UnknownYear"
-        if report_date:
-            try:
-                dt = date.fromisoformat(report_date)
-                test_month = dt.strftime("%B")
-                test_year = str(dt.year)
-            except Exception:
-                m = re.match(r'(\d{4})[-/](\d{2})[-/](\d{2})', report_date)
-                if m:
-                    year_val, month_val = int(m.group(1)), int(m.group(2))
-                    try:
-                        dt = date(year_val, month_val, 1)
-                        test_month = dt.strftime("%B")
-                        test_year = str(dt.year)
-                    except Exception:
-                        pass
-        
-        # Create member folder
-        member_dir = FILES_DIR / sanitized_person_name
-        member_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Collision handling
-        base_filename = f"{sanitized_person_name}_{test_month}_{test_year}"
-        counter = 0
-        final_filename = f"{base_filename}{ext}"
-        while (member_dir / final_filename).exists():
-            counter += 1
-            final_filename = f"{base_filename}_{counter}{ext}"
-            
-        # Write file to the folder
-        (member_dir / final_filename).write_bytes(data)
-        
-        # Save relative stored name path
-        stored_name = f"{sanitized_person_name}/{final_filename}"
-        
-        # 4. Construct extraction response structure (pre-match test types)
-        types = _test_types(conn)
-        items = []
-        for r in parsed.get("results", []):
-            name = r.get("test_name")
-            value, parsed_qual = parse_value(r.get("value"))
-            qualifier = r.get("qualifier") or parsed_qual
-            if qualifier not in ("<", ">"):
-                qualifier = None
-            unit = (r.get("unit") or "").strip()
-            value_text = (r.get("value_text") or "").strip() or None
-            is_qual = value is None and value_text is not None
-            if (value is None and value_text is None) or not name or not str(name).strip():
-                continue
-            ref_low = to_number(r.get("ref_low"))
-            ref_high = to_number(r.get("ref_high"))
-            tt = match_test_type(name, types, is_qualitative=is_qual)
-            canonical = None
-            if tt and not is_qual:
-                canonical = to_canonical(value, unit, tt["canonical_unit"], tt["conversions"])
-            match_ok = tt is not None and (is_qual or canonical is not None)
-            items.append(
-                {
-                    "test_name": name,
-                    "value": value,
-                    "value_text": value_text,
-                    "qualifier": qualifier,
-                    "unit": unit,
-                    "ref_low": ref_low,
-                    "ref_high": ref_high,
-                    "flag": r.get("flag"),
-                    "matched_test_type_id": tt["id"] if match_ok else None,
-                    "matched_name": tt["name"] if match_ok else None,
-                    "canonical_unit": tt["canonical_unit"] if match_ok else None,
-                    "value_canonical": canonical if match_ok else None,
-                    "unit_known": match_ok,
-                }
-            )
-            
-        extraction_res = {
-            "document_id": None,
-            "report_date": report_date,
-            "lab_name": lab_name,
-            "patient_name": patient_name,
-            "provider": provider,
-            "model": model,
-            "items": items,
-        }
-        
-        # Insert into documents table
         cur = conn.execute(
-            """INSERT INTO documents (member_id, filename, stored_name, mime, size, report_date, lab_name, status, extraction, file_hash)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 'needs_review', ?, ?)""",
-            (member_id, final_filename, stored_name, mime, len(data), report_date, lab_name, json.dumps(extraction_res), file_hash),
+            """INSERT INTO documents (member_id, filename, stored_name, mime, size, status, file_hash)
+               VALUES (?, ?, ?, ?, ?, 'processing', ?)""",
+            (member_id, file.filename, stored_name, mime, len(data), file_hash),
         )
         doc_id = cur.lastrowid
-        
-        # Populate document_items table
-        for r in parsed.get("results", []):
-            name = r.get("test_name")
-            value, parsed_qual = parse_value(r.get("value"))
-            qualifier = r.get("qualifier") or parsed_qual
-            if qualifier not in ("<", ">"):
-                qualifier = None
-            unit = (r.get("unit") or "").strip()
-            value_text = (r.get("value_text") or "").strip() or None
-            if (value is None and value_text is None) or not name or not str(name).strip():
-                continue
-            ref_low = to_number(r.get("ref_low"))
-            ref_high = to_number(r.get("ref_high"))
-            page_num = r.get("page_number")
-            try:
-                page_num = int(float(page_num)) if page_num is not None else 1
-            except ValueError:
-                page_num = 1
-                
-            tt = match_test_type(name, types,
-                                 is_qualitative=(value is None and value_text is not None))
-            canonical = None
-            if tt and value is not None:
-                canonical = to_canonical(value, unit, tt["canonical_unit"], tt["conversions"])
-            match_ok = tt is not None and (value is None or canonical is not None)
-            
-            conn.execute(
-                """INSERT INTO document_items (
-                    document_id, raw_name, raw_value, raw_value_text, raw_unit, raw_qualifier, raw_flag,
-                    raw_ref_low, raw_ref_high, page_number, test_type_id, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'needs_review')""",
-                (
-                    doc_id, name, value, value_text, unit, qualifier, r.get("flag"),
-                    ref_low, ref_high, page_num, tt["id"] if match_ok else None
-                )
-            )
-            
-        # Update extraction payload with real document ID
-        extraction_res["document_id"] = doc_id
-        conn.execute("UPDATE documents SET extraction = ? WHERE id = ?", (json.dumps(extraction_res), doc_id))
         conn.commit()
 
-        # Take the unambiguous rows now; leave a person only what needs judging.
-        auto = auto_import_items(conn, doc_id)
-        extraction_res["auto"] = auto
-        conn.execute("UPDATE documents SET extraction = ?, status = ? WHERE id = ?",
-                     (json.dumps(extraction_res), recompute_doc_status(conn, doc_id), doc_id))
-        conn.commit()
-        
+        # Runs after the response is sent.
+        background.add_task(_process_upload_in_background, doc_id)
+
         row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
         return dict(row)
     finally:
@@ -1268,7 +1122,10 @@ def list_documents(
                     
         if status_group:
             if status_group == "needs_attention":
-                query += " AND d.status IN ('needs_review', 'partially_imported', 'failed')"
+                # 'processing' belongs here: it is not done, and a report still
+                # being read should stay visible rather than vanish from both
+                # filters until it finishes.
+                query += " AND d.status IN ('needs_review', 'partially_imported', 'failed', 'processing')"
             elif status_group == "done":
                 query += " AND d.status IN ('fully_imported', 'reviewed')"
                 
@@ -1415,6 +1272,204 @@ class ExtractReq(BaseModel):
     model: Optional[str] = None
 
 
+def _process_upload_in_background(doc_id: int) -> None:
+    """Read an uploaded report after the response has already gone back.
+
+    Runs on its own connection because the request's is closed by the time this
+    starts. Every failure has to be caught and written to the document: nobody
+    is waiting on this call, so an exception that escapes would leave the report
+    stuck on "Reading…" forever with no way to find out why.
+    """
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+        if not row:
+            return
+        try:
+            _run_extraction(conn, doc_id, row)
+        except Exception as e:
+            conn.execute(
+                "UPDATE documents SET status = 'failed', extraction = ? WHERE id = ?",
+                (json.dumps({"error": f"Couldn't read this report: {e}"}), doc_id),
+            )
+            conn.commit()
+            return
+        # Now that the report date is known, give the file the name the rest of
+        # the app expects (Member_Month_Year). Best effort: a failed rename is
+        # cosmetic and must not undo a successful import.
+        try:
+            _rename_stored_file(conn, doc_id)
+        except Exception:
+            pass
+    finally:
+        conn.close()
+
+
+def _rename_stored_file(conn, doc_id: int) -> None:
+    """Rename an uploaded file to Member_Month_Year once its date is known."""
+    row = conn.execute(
+        """SELECT d.stored_name, d.report_date, d.filename, m.name AS member_name
+           FROM documents d LEFT JOIN members m ON m.id = d.member_id
+           WHERE d.id = ?""",
+        (doc_id,),
+    ).fetchone()
+    if not row or not row["stored_name"]:
+        return
+    src = FILES_DIR / row["stored_name"]
+    if not src.exists():
+        return
+
+    person = sanitize_name(row["member_name"]) if row["member_name"] else "unassigned"
+    month, year = "UnknownMonth", "UnknownYear"
+    if row["report_date"]:
+        m = re.match(r"(\d{4})[-/](\d{1,2})", str(row["report_date"]))
+        if m:
+            try:
+                dt = date(int(m.group(1)), int(m.group(2)), 1)
+                month, year = dt.strftime("%B"), str(dt.year)
+            except ValueError:
+                pass
+
+    ext = Path(row["filename"] or "").suffix or src.suffix
+    member_dir = FILES_DIR / person
+    member_dir.mkdir(parents=True, exist_ok=True)
+    base = f"{person}_{month}_{year}"
+    final = f"{base}{ext}"
+    n = 0
+    while (member_dir / final).exists():
+        n += 1
+        final = f"{base}_{n}{ext}"
+    src.rename(member_dir / final)
+    conn.execute(
+        "UPDATE documents SET stored_name = ?, filename = ? WHERE id = ?",
+        (f"{person}/{final}", final, doc_id),
+    )
+    conn.commit()
+
+
+def _run_extraction(conn, doc_id: int, row, provider_override=None, model_override=None) -> dict:
+    """Read a stored report with AI, record its rows, and auto-import the certain ones.
+
+    Split out of the /extract endpoint so an upload can hand this work to a
+    background task. It is the slow part — an AI call over a whole PDF, which
+    can run for minutes on a long report — and making someone sit and watch it
+    is what made uploading feel like it had hung.
+    """
+    # Fallback for legacy documents uploaded before this update
+    data = (FILES_DIR / row["stored_name"]).read_bytes()
+    provider, model, key = _ai_config(conn, provider_override, model_override)
+    extraction_sys = _get_setting(conn, "prompt_extraction_system", ai.EXTRACTION_SYSTEM)
+    try:
+        parsed = ai.extract(provider, model, key, data, row["mime"], system_prompt=extraction_sys)
+    except ai.AIError as e:
+        raise HTTPException(400, str(e))
+
+    types = _test_types(conn)
+    items = []
+    for r in parsed.get("results", []):
+        name = r.get("test_name")
+        value, parsed_qual = parse_value(r.get("value"))
+        qualifier = r.get("qualifier") or parsed_qual
+        if qualifier not in ("<", ">"):
+            qualifier = None
+        unit = (r.get("unit") or "").strip()
+        value_text = (r.get("value_text") or "").strip() or None
+        is_qual = value is None and value_text is not None
+        if (value is None and value_text is None) or not name or not str(name).strip():
+            continue
+        ref_low = to_number(r.get("ref_low"))
+        ref_high = to_number(r.get("ref_high"))
+        tt = match_test_type(name, types, is_qualitative=is_qual)
+        canonical = None
+        if tt and not is_qual:
+            canonical = to_canonical(value, unit, tt["canonical_unit"], tt["conversions"])
+        match_ok = tt is not None and (is_qual or canonical is not None)
+        items.append(
+            {
+                "test_name": name,
+                "value": value,
+                "value_text": value_text,
+                "qualifier": qualifier,
+                "unit": unit,
+                "ref_low": ref_low,
+                "ref_high": ref_high,
+                "flag": r.get("flag"),
+                "matched_test_type_id": tt["id"] if match_ok else None,
+                "matched_name": tt["name"] if match_ok else None,
+                "canonical_unit": tt["canonical_unit"] if match_ok else None,
+                "value_canonical": canonical if match_ok else None,
+                "unit_known": match_ok,
+            }
+        )
+
+    report_date = parsed.get("report_date")
+    response = {
+        "document_id": doc_id,
+        "report_date": report_date,
+        "lab_name": parsed.get("lab_name"),
+        "patient_name": parsed.get("patient_name"),
+        "provider": provider,
+        "model": model,
+        "items": items,
+    }
+    
+    # Clear existing items and update documents status
+    conn.execute("DELETE FROM document_items WHERE document_id = ?", (doc_id,))
+    
+    # Populate document_items table
+    for r in parsed.get("results", []):
+        name = r.get("test_name")
+        value, parsed_qual = parse_value(r.get("value"))
+        qualifier = r.get("qualifier") or parsed_qual
+        if qualifier not in ("<", ">"):
+            qualifier = None
+        unit = (r.get("unit") or "").strip()
+        value_text = (r.get("value_text") or "").strip() or None
+        if (value is None and value_text is None) or not name or not str(name).strip():
+            continue
+        ref_low = to_number(r.get("ref_low"))
+        ref_high = to_number(r.get("ref_high"))
+        page_num = r.get("page_number")
+        try:
+            page_num = int(float(page_num)) if page_num is not None else 1
+        except ValueError:
+            page_num = 1
+            
+        tt = match_test_type(name, types,
+                             is_qualitative=(value is None and value_text is not None))
+        canonical = None
+        if tt and value is not None:
+            canonical = to_canonical(value, unit, tt["canonical_unit"], tt["conversions"])
+        match_ok = tt is not None and (value is None or canonical is not None)
+        
+        conn.execute(
+            """INSERT INTO document_items (
+                document_id, raw_name, raw_value, raw_value_text, raw_unit, raw_qualifier, raw_flag,
+                raw_ref_low, raw_ref_high, page_number, test_type_id, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'needs_review')""",
+            (
+                doc_id, name, value, value_text, unit, qualifier, r.get("flag"),
+                ref_low, ref_high, page_num, tt["id"] if match_ok else None
+            )
+        )
+
+    conn.execute(
+        """UPDATE documents SET status = 'needs_review',
+               report_date = COALESCE(?, report_date),
+               lab_name = COALESCE(?, lab_name),
+               extraction = ? WHERE id = ?""",
+        (report_date, parsed.get("lab_name"), json.dumps(response), doc_id),
+    )
+    conn.commit()
+
+    auto = auto_import_items(conn, doc_id)
+    response["auto"] = auto
+    conn.execute("UPDATE documents SET extraction = ?, status = ? WHERE id = ?",
+                 (json.dumps(response), recompute_doc_status(conn, doc_id), doc_id))
+    conn.commit()
+    return response
+
+
 @app.post("/api/documents/{doc_id}/extract")
 def extract_document(doc_id: int, req: ExtractReq, request: Request):
     conn = get_db()
@@ -1423,124 +1478,11 @@ def extract_document(doc_id: int, req: ExtractReq, request: Request):
         row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
         if not row:
             raise HTTPException(404, "Not found")
-
         if row["extraction"]:
-            # If already extracted during upload, return the cached extraction response
+            # Already read — hand back the saved result rather than paying for
+            # the AI call a second time.
             return json.loads(row["extraction"])
-
-        # Fallback for legacy documents uploaded before this update
-        data = (FILES_DIR / row["stored_name"]).read_bytes()
-        provider, model, key = _ai_config(conn, req.provider, req.model)
-        extraction_sys = _get_setting(conn, "prompt_extraction_system", ai.EXTRACTION_SYSTEM)
-        try:
-            parsed = ai.extract(provider, model, key, data, row["mime"], system_prompt=extraction_sys)
-        except ai.AIError as e:
-            raise HTTPException(400, str(e))
-
-        types = _test_types(conn)
-        items = []
-        for r in parsed.get("results", []):
-            name = r.get("test_name")
-            value, parsed_qual = parse_value(r.get("value"))
-            qualifier = r.get("qualifier") or parsed_qual
-            if qualifier not in ("<", ">"):
-                qualifier = None
-            unit = (r.get("unit") or "").strip()
-            value_text = (r.get("value_text") or "").strip() or None
-            is_qual = value is None and value_text is not None
-            if (value is None and value_text is None) or not name or not str(name).strip():
-                continue
-            ref_low = to_number(r.get("ref_low"))
-            ref_high = to_number(r.get("ref_high"))
-            tt = match_test_type(name, types, is_qualitative=is_qual)
-            canonical = None
-            if tt and not is_qual:
-                canonical = to_canonical(value, unit, tt["canonical_unit"], tt["conversions"])
-            match_ok = tt is not None and (is_qual or canonical is not None)
-            items.append(
-                {
-                    "test_name": name,
-                    "value": value,
-                    "value_text": value_text,
-                    "qualifier": qualifier,
-                    "unit": unit,
-                    "ref_low": ref_low,
-                    "ref_high": ref_high,
-                    "flag": r.get("flag"),
-                    "matched_test_type_id": tt["id"] if match_ok else None,
-                    "matched_name": tt["name"] if match_ok else None,
-                    "canonical_unit": tt["canonical_unit"] if match_ok else None,
-                    "value_canonical": canonical if match_ok else None,
-                    "unit_known": match_ok,
-                }
-            )
-
-        report_date = parsed.get("report_date")
-        response = {
-            "document_id": doc_id,
-            "report_date": report_date,
-            "lab_name": parsed.get("lab_name"),
-            "patient_name": parsed.get("patient_name"),
-            "provider": provider,
-            "model": model,
-            "items": items,
-        }
-        
-        # Clear existing items and update documents status
-        conn.execute("DELETE FROM document_items WHERE document_id = ?", (doc_id,))
-        
-        # Populate document_items table
-        for r in parsed.get("results", []):
-            name = r.get("test_name")
-            value, parsed_qual = parse_value(r.get("value"))
-            qualifier = r.get("qualifier") or parsed_qual
-            if qualifier not in ("<", ">"):
-                qualifier = None
-            unit = (r.get("unit") or "").strip()
-            value_text = (r.get("value_text") or "").strip() or None
-            if (value is None and value_text is None) or not name or not str(name).strip():
-                continue
-            ref_low = to_number(r.get("ref_low"))
-            ref_high = to_number(r.get("ref_high"))
-            page_num = r.get("page_number")
-            try:
-                page_num = int(float(page_num)) if page_num is not None else 1
-            except ValueError:
-                page_num = 1
-                
-            tt = match_test_type(name, types,
-                                 is_qualitative=(value is None and value_text is not None))
-            canonical = None
-            if tt and value is not None:
-                canonical = to_canonical(value, unit, tt["canonical_unit"], tt["conversions"])
-            match_ok = tt is not None and (value is None or canonical is not None)
-            
-            conn.execute(
-                """INSERT INTO document_items (
-                    document_id, raw_name, raw_value, raw_value_text, raw_unit, raw_qualifier, raw_flag,
-                    raw_ref_low, raw_ref_high, page_number, test_type_id, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'needs_review')""",
-                (
-                    doc_id, name, value, value_text, unit, qualifier, r.get("flag"),
-                    ref_low, ref_high, page_num, tt["id"] if match_ok else None
-                )
-            )
-
-        conn.execute(
-            """UPDATE documents SET status = 'needs_review',
-                   report_date = COALESCE(?, report_date),
-                   lab_name = COALESCE(?, lab_name),
-                   extraction = ? WHERE id = ?""",
-            (report_date, parsed.get("lab_name"), json.dumps(response), doc_id),
-        )
-        conn.commit()
-
-        auto = auto_import_items(conn, doc_id)
-        response["auto"] = auto
-        conn.execute("UPDATE documents SET extraction = ?, status = ? WHERE id = ?",
-                     (json.dumps(response), recompute_doc_status(conn, doc_id), doc_id))
-        conn.commit()
-        return response
+        return _run_extraction(conn, doc_id, row, req.provider, req.model)
     finally:
         conn.close()
 

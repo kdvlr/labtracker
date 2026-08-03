@@ -865,6 +865,30 @@ textarea { resize: vertical; }
 }
 .prov-actions { margin-top: 8px; }
 
+/* Upload confirmation. Large type and one obvious action: this is the screen a
+   70-year-old sees after handing over a report, and its whole job is to say
+   "you're done, nothing is stuck, come back later". */
+.upload-done {
+  text-align: center; padding: 28px 20px; margin-top: 16px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.upload-done-tick {
+  width: 56px; height: 56px; margin: 0 auto 14px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 30px; font-weight: 700;
+  background: var(--good); color: var(--chip-ink);
+}
+.upload-done-title { margin: 0 0 10px; font-size: 22px; font-weight: 600; }
+.upload-done-body {
+  margin: 0 auto 10px; max-width: 46ch;
+  font-size: 16.5px; line-height: 1.6; color: var(--text-secondary);
+}
+.upload-done-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 20px; }
+.btn-lg { min-height: 52px; padding: 14px 22px; font-size: 16.5px; }
+@media (max-width: 640px) {
+  .upload-done-actions .btn-lg { width: 100%; justify-content: center; }
+}
+
 /* ---------- settings page ---------- */
 /* The page is grouped by intent: work that needs a person, then the one setting
    in daily use, then privacy, then expert tools folded away. These styles carry

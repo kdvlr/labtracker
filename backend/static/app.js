@@ -875,7 +875,7 @@ async function renderHealthAnalysis(mount, member) {
       el("span", { class: "spinner" }),
       el("div", {}, [
         el("div", { style: "font-weight:600" }, "Analyzing the full picture…"),
-        el("div", { class: "page-sub", style: "margin:4px 0 0" }, `Reviewing all ${data.marker_count || ""} biomarkers and their history. This can take up to a minute.`),
+        el("div", { class: "page-sub", style: "margin:4px 0 0" }, `Reading all ${data.marker_count || ""} biomarkers and their history. This usually takes a few minutes — you can leave this page and come back.`),
       ]),
     ]));
     try {
@@ -2050,6 +2050,32 @@ function unitToggle(t) {
 }
 
 // ---------------- upload / extract / review ----------------
+// Shown once files are safely uploaded. Written for someone who is not sure
+// whether the app is working: says the job is done, says what happens next
+// without them, and gives one thing to do (leave). No spinner — nothing here
+// is still running in this tab.
+function renderUploadDone(mount, docs, getMemberId) {
+  mount.innerHTML = "";
+  const n = docs.length;
+  const member = (state.members || []).find((m) => m.id === getMemberId());
+  mount.append(el("div", { class: "upload-done" }, [
+    el("div", { class: "upload-done-tick" }, "✓"),
+    el("h3", { class: "upload-done-title" },
+      n === 1 ? "Report uploaded" : `${n} reports uploaded`),
+    el("p", { class: "upload-done-body" },
+      `Saved${member ? " to " + member.name : ""}. We're reading ${n === 1 ? "it" : "them"} now — this usually takes a few minutes, ` +
+      "and it keeps going even if you close the app."),
+    el("p", { class: "upload-done-body" },
+      "Come back in about 5 minutes and the results will be waiting under Documents. " +
+      "Nothing else is needed from you right now."),
+    el("div", { class: "upload-done-actions" }, [
+      el("button", { class: "btn btn-primary btn-lg", onclick: () => navigateTo("documents") }, "See my reports"),
+      el("button", { class: "btn btn-lg", onclick: () => renderUpload(mount.closest(".main") || document.getElementById("main")) },
+        "Upload another"),
+    ]),
+  ]));
+}
+
 function renderUpload(main) {
   document.querySelectorAll('[data-view="upload"]').forEach((b) => b.classList.add("active"));
   main.append(el("div", { class: "page-head" }, el("div", {}, [
@@ -2225,24 +2251,13 @@ function renderUpload(main) {
               throw e;
             }
           }
-          let result;
-          if (doc.status !== "uploaded") {
-            try {
-              result = await api(`/documents/${doc.id}/extraction`);
-            } catch (err) {
-              console.error("Failed fetching live extraction:", err);
-            }
-          }
-          if (result && !result.error) {
-            status.innerHTML = "";
-            renderReview(reviewMount, doc, () => Number(memberSel.value), result);
-          } else {
-            status.innerHTML = ""; status.append(el("span", {}, [el("span", { class: "spinner" }), " Extracting with AI… this can take ~20s"]));
-            await api(`/documents/${doc.id}/extract`, { method: "POST", body: {} });
-            result = await api(`/documents/${doc.id}/extraction`);
-            status.innerHTML = "";
-            renderReview(reviewMount, doc, () => Number(memberSel.value), result);
-          }
+          // Reading the report happens in the background now, so the upload is
+          // finished the moment the file is saved. Say so plainly and let them
+          // leave — waiting on a multi-minute AI call was the old behaviour and
+          // it looked like the app had frozen.
+          status.innerHTML = "";
+          selectedFiles = [];
+          renderUploadDone(status, [doc], () => Number(memberSel.value));
         } catch (e) {
           status.innerHTML = ""; status.append(el("div", { class: "warn" }, "Error: " + e.message));
         }
@@ -2255,6 +2270,7 @@ function renderUpload(main) {
           return { file: f, row, stat };
         });
         status.append(el("div", { class: "card", style: "margin-top:12px; padding:0; border:1px solid var(--border); border-bottom:none;" }, statusItems.map(item => item.row)));
+        const uploaded = [];
 
         for (const item of statusItems) {
           item.stat.innerHTML = `<span class="spinner" style="margin-right:6px"></span> Uploading…`;
@@ -2288,31 +2304,15 @@ function renderUpload(main) {
             }
           }
           
-          let extObj;
-          if (doc.extraction) {
-            try { extObj = JSON.parse(doc.extraction); } catch {}
-          }
-          if (extObj && !extObj.error) {
-            item.stat.innerHTML = `✓ Extracted`;
-            item.stat.style.color = "var(--low)";
-          } else {
-            item.stat.innerHTML = `<span class="spinner" style="margin-right:6px"></span> Extracting with AI…`;
-            try {
-              await api(`/documents/${doc.id}/extract`, { method: "POST", body: {} });
-              item.stat.innerHTML = `✓ Extracted`;
-              item.stat.style.color = "var(--low)";
-            } catch (e) {
-              item.stat.innerHTML = `❌ AI Error: ${e.message}`;
-              item.stat.style.color = "var(--high)";
-            }
-          }
+          // Uploaded. Reading it is the background's job — don't hold the
+          // queue open waiting for an AI call per file.
+          item.stat.textContent = "\u2713 Uploaded";
+          item.stat.style.color = "var(--good)";
+          uploaded.push(doc);
         }
 
-        const completionMsg = el("div", { style: "margin-top: 16px; text-align: center;" }, [
-          el("p", { style: "font-weight:600; color:var(--low); margin-bottom: 12px; font-size:15px;" }, "✓ All documents processed!"),
-          el("button", { class: "btn btn-primary", onclick: () => navigateTo("documents") }, "Go to Documents to Review")
-        ]);
-        status.append(completionMsg);
+        renderUploadDone(status, uploaded, () => Number(memberSel.value));
+        selectedFiles = [];
       }
     } }, "Upload & extract"),
     status,
@@ -2489,7 +2489,7 @@ function renderReview(mount, doc, memberId, result, main, errorMsg, isLegacy) {
       onclick: async () => {
         extractBtn.disabled = true;
         bannerStatus.innerHTML = ""; 
-        bannerStatus.append(el("span", {}, [el("span", { class: "spinner" }), " Extracting with AI… this can take ~20s"]));
+        bannerStatus.append(el("span", {}, [el("span", { class: "spinner" }), " Reading the report… this can take a few minutes"]));
         try {
           await api(`/documents/${doc.id}/extract`, { method: "POST", body: {} });
           const newResult = await api(`/documents/${doc.id}/extraction`);
@@ -2840,12 +2840,17 @@ async function renderDocuments(main) {
             const initialsStr = d.member_name ? d.member_name.trim().slice(0, 1).toUpperCase() : "?";
             const colorStr = d.member_name ? (state.members.find(m => m.id === d.member_id)?.color || "#5c554e") : "#a0a0a0";
             const statusTextMap = {
+              "processing": "Reading it now",
               "needs_review": "Needs review",
               "partially_imported": "Partially imported",
-              "failed": "Failed extraction"
+              "failed": "Couldn't read it"
             };
-            const pillClass = d.status === "failed" ? "pill-red" : "pill-amber";
-            const buttonText = d.status === "failed" ? "Retry" : "Review →";
+            // A report still being read needs nothing from anyone yet, so it
+            // gets a neutral pill and no call to action.
+            const pillClass = d.status === "failed" ? "pill-red"
+                            : d.status === "processing" ? "pill-grey" : "pill-amber";
+            const buttonText = d.status === "failed" ? "Retry"
+                             : d.status === "processing" ? "Check progress" : "Review →";
             
             const card = el("div", { class: "attention-card", onclick: () => openReview(d) }, [
               el("div", { class: "attention-card-title" }, d.filename),
@@ -3106,13 +3111,15 @@ async function renderDocuments(main) {
         const colorStr = d.member_name ? (state.members.find(m => m.id === d.member_id)?.color || "#5c554e") : "#a0a0a0";
         
         const statusTextMap = {
+          "processing": "Reading it now",
           "needs_review": "Needs review",
           "fully_imported": "Done",
           "partially_imported": "Needs review",
           "reviewed": "Reviewed",
-          "failed": "Failed"
+          "failed": "Couldn't read it"
         };
         const pillClass = {
+          "processing": "pill-grey",
           "needs_review": "pill-amber",
           "partially_imported": "pill-amber",
           "failed": "pill-red",
