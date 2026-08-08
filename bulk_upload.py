@@ -8,7 +8,7 @@ import requests
 
 def main():
     parser = argparse.ArgumentParser(description="Bulk upload lab reports to LabTracker")
-    parser.add_argument("--url", default="http://localhost:8000", help="Base URL of your LabTracker instance (e.g. http://localhost:8000 or https://labs.dkiran.com)")
+    parser.add_argument("--url", default="http://localhost:8000", help="Base URL of your LabTracker instance (e.g. http://localhost:8000 or https://labs.example.com)")
     parser.add_argument("--pin", required=True, help="Your device unlock PIN")
     parser.add_argument("--member-id", type=int, required=True, help="ID of the family member to upload results to")
     parser.add_argument("--dir", required=True, help="Directory containing the lab report files (PDFs/Images)")

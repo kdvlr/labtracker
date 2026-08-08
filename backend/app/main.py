@@ -1662,7 +1662,7 @@ def commit_results(req: CommitReq, request: Request):
         # nothing used to check they agreed — so a review committed while the
         # member selector pointed elsewhere wrote one person's report onto
         # another's record, with the results still linked to the original PDF.
-        # That is how 40 of Kiran's readings ended up on his son's profile.
+        # That is how 40 of the patient's readings ended up on his son's profile.
         #
         # An unassigned document is fine: committing it is what assigns it.
         if req.document_id:
