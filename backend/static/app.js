@@ -3658,7 +3658,7 @@ async function buildModelEvaluationPanel(container) {
                 el("option", { value: "openai" }, "OpenAI"),
                 el("option", { value: "anthropic" }, "Anthropic")
               ]),
-              el("input", { id: "eval-b-model", type: "text", value: "gemini-3.6-flash", style: "flex: 1.5;", placeholder: "model ID" })
+              el("input", { id: "eval-b-model", type: "text", value: "gemini-3.7-flash", style: "flex: 1.5;", placeholder: "model ID" })
             ])
           ]),
           el("div", { style: "flex: 1; min-width: 200px;" }, [
@@ -3695,7 +3695,7 @@ async function buildModelEvaluationPanel(container) {
 
       const updateModelOpts = (prefix, provider) => {
         const input = document.getElementById(`eval-${prefix}-model`);
-        if (provider === "gemini") input.value = "gemini-3.6-flash";
+        if (provider === "gemini") input.value = "gemini-3.7-flash";
         if (provider === "openai") input.value = "gpt-4o";
         if (provider === "anthropic") input.value = "claude-3-5-sonnet-latest";
       };
@@ -4073,7 +4073,7 @@ async function renderSettings(main) {
   const PROVIDERS = {
     anthropic: { label: "Anthropic", keyPh: "sk-ant-...", modelPh: "claude-opus-4-8" },
     openai:    { label: "OpenAI",    keyPh: "sk-...",     modelPh: "gpt-4o" },
-    gemini:    { label: "Gemini",    keyPh: "AIza...",    modelPh: "gemini-3.6-flash" },
+    gemini:    { label: "Gemini",    keyPh: "AIza...",    modelPh: "gemini-3.7-flash" },
   };
   const activeProvider = s.ai_provider
     || (s.has_key_gemini ? "gemini" : (s.has_key_openai ? "openai" : "anthropic"));
