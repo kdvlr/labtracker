@@ -2640,7 +2640,7 @@ def list_categories():
 
 class AskReq(BaseModel):
     member_id: int
-    test_type_ids: list[int]
+    test_type_ids: Optional[list[int]] = None
     question: str
     provider: Optional[str] = None
     model: Optional[str] = None
@@ -2669,15 +2669,53 @@ def ask(req: AskReq, request: Request):
             extra_info.append(f"Medications: {member['medications'].strip()}")
         if extra_info:
             lines.append(" · ".join(extra_info))
-        for ttid in req.test_type_ids:
-            tt = conn.execute("SELECT * FROM test_types WHERE id = ?", (ttid,)).fetchone()
-            if not tt:
-                continue
+
+        # Determine cutoff date for 1-year context window
+        one_year_ago = (date.today() - timedelta(days=365)).isoformat()
+        recent_count = conn.execute(
+            "SELECT COUNT(*) FROM results WHERE member_id = ? AND taken_at >= ?",
+            (req.member_id, one_year_ago)
+        ).fetchone()[0]
+
+        if recent_count > 0:
+            cutoff_date = one_year_ago
+        else:
+            max_date_row = conn.execute("SELECT MAX(taken_at) FROM results WHERE member_id = ?", (req.member_id,)).fetchone()
+            max_date_str = max_date_row[0] if max_date_row and max_date_row[0] else None
+            if max_date_str:
+                try:
+                    max_d = date.fromisoformat(max_date_str[:10])
+                    cutoff_date = (max_d - timedelta(days=365)).isoformat()
+                except Exception:
+                    cutoff_date = "1970-01-01"
+            else:
+                cutoff_date = "1970-01-01"
+
+        if req.test_type_ids and len(req.test_type_ids) > 0:
+            placeholders = ",".join("?" * len(req.test_type_ids))
+            tt_rows = conn.execute(
+                f"SELECT * FROM test_types WHERE id IN ({placeholders}) ORDER BY category, name",
+                req.test_type_ids
+            ).fetchall()
+            filter_cutoff = "1970-01-01"
+        else:
+            tt_rows = conn.execute(
+                """SELECT DISTINCT tt.* FROM test_types tt
+                   JOIN results r ON r.test_type_id = tt.id
+                   WHERE r.member_id = ? AND r.taken_at >= ?
+                   ORDER BY tt.category, tt.name""",
+                (req.member_id, cutoff_date)
+            ).fetchall()
+            filter_cutoff = cutoff_date
+
+        for tt in tt_rows:
             rows = conn.execute(
                 """SELECT taken_at, value, unit, value_canonical, value_text, flag FROM results
-                   WHERE member_id = ? AND test_type_id = ? ORDER BY taken_at""",
-                (req.member_id, ttid),
+                   WHERE member_id = ? AND test_type_id = ? AND taken_at >= ? ORDER BY taken_at""",
+                (req.member_id, tt["id"], filter_cutoff),
             ).fetchall()
+            if not rows:
+                continue
             ref = []
             if tt["ref_low"] is not None:
                 ref.append(f"low {tt['ref_low']}")

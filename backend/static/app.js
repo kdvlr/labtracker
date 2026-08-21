@@ -4262,32 +4262,34 @@ async function renderSettings(main) {
 // ---------------- ask AI modal ----------------
 async function openAsk(member) {
   const summary = await api(`/members/${member.id}/summary`);
-  const selected = new Set();
-  const chips = el("div", { class: "chips" });
   if (!summary.length) { toast("No results to ask about yet"); return; }
-  for (const s of summary) {
-    const chip = el("button", { class: "chip", onclick: () => {
-      if (selected.has(s.test_type_id)) { selected.delete(s.test_type_id); chip.classList.remove("on"); }
-      else { selected.add(s.test_type_id); chip.classList.add("on"); }
-    } }, s.name);
-    chips.append(chip);
+
+  // Compute date range of summary items for context line
+  const dates = summary.map((s) => s.latest_date).filter(Boolean).sort();
+  let contextText = `Including ${summary.length} biomarker${summary.length > 1 ? "s" : ""} from the past year`;
+  if (dates.length) {
+    const minD = formatDate(dates[0]);
+    const maxD = formatDate(dates[dates.length - 1]);
+    contextText = `Including tests from ${minD === maxD ? minD : minD + " – " + maxD} (${summary.length} biomarker${summary.length > 1 ? "s" : ""})`;
   }
-  const q = el("textarea", { rows: 3, placeholder: "e.g. How has my cholesterol trended over the last 3 years? Anything concerning?" });
+
+  const q = el("textarea", { rows: 3, placeholder: "e.g. How has my cholesterol trended over the last year? Anything concerning or abnormal?" });
   const answer = el("div");
 
   const modal = openModal(`Ask AI about ${member.name}'s results`, [
-    el("p", { class: "page-sub" }, "Select which tests to include as context:"),
-    chips,
+    el("div", { class: "ask-context-pill", style: "display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); background: var(--panel-2); border: 1px solid var(--border); padding: 6px 12px; border-radius: var(--radius-sm); margin-bottom: 12px;" }, [
+      el("span", { style: "font-size: 14px;" }, "📋"),
+      el("span", {}, contextText)
+    ]),
     el("div", { class: "field" }, [el("label", {}, "Your question"), q]),
     answer,
   ], [
     el("button", { class: "btn", onclick: closeModal }, "Close"),
     el("button", { class: "btn btn-primary", onclick: async () => {
       if (!q.value.trim()) return toast("Type a question");
-      const ids = selected.size ? [...selected] : summary.map((s) => s.test_type_id);
       answer.innerHTML = ""; answer.append(el("div", { class: "ask-answer" }, [el("span", { class: "spinner" }), " Thinking…"]));
       try {
-        const res = await api("/ask", { method: "POST", body: { member_id: member.id, test_type_ids: ids, question: q.value.trim() } });
+        const res = await api("/ask", { method: "POST", body: { member_id: member.id, question: q.value.trim() } });
         answer.innerHTML = ""; answer.append(el("div", { class: "ask-answer" }, res.answer));
       } catch (e) { answer.innerHTML = ""; answer.append(el("div", { class: "ask-answer warn" }, "Error: " + e.message + "\n\nCheck your AI provider & key in Settings.")); }
     } }, "Ask"),

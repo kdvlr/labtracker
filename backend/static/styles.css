@@ -350,40 +350,47 @@ body {
 .count-pill.borderline { background: var(--low-soft); color: var(--low); }
 .count-pill.in { background: var(--good-soft); color: var(--good); }
 .count-pill.minor { background: var(--panel-2); color: var(--muted); }
-.cat-body { display: flex; flex-direction: column; gap: 16px; padding: 4px 0 20px; }
+.cat-body { display: flex; flex-direction: column; gap: 12px; padding: 4px 0 18px; }
+@media (min-width: 900px) {
+  .cat-body {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+}
 
 /* ---------- biomarker range card ---------- */
 .bio-card {
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
-  box-shadow: var(--shadow-sm); padding: 20px 24px 24px; cursor: pointer;
+  box-shadow: var(--shadow-sm); padding: 14px 18px 16px; cursor: pointer;
   transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .bio-card:hover { border-color: var(--accent); box-shadow: var(--shadow); transform: translateY(-2px); }
 .bio-card:active { transform: translateY(0) scale(0.99); }
-.bio-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
-.bio-name { font-family: var(--sans-display); font-weight: 500; font-size: 17px; letter-spacing: -0.01em; }
-.bio-date { color: var(--text-secondary); font-size: 15px; margin-top: 3px; }
-.bio-right { display: flex; align-items: center; gap: 12px; flex: none; }
-.bio-value { font-family: var(--sans-display); font-size: 19px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bio-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.bio-name { font-family: var(--sans-display); font-weight: 500; font-size: 15.5px; letter-spacing: -0.01em; line-height: 1.25; }
+.bio-date { color: var(--text-secondary); font-size: 13px; margin-top: 2px; }
+.bio-right { display: flex; align-items: center; gap: 10px; flex: none; }
+.bio-value { font-family: var(--sans-display); font-size: 17px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .bio-value.red { color: var(--high); }
 .bio-value.amber { color: var(--low); }
-.bio-value .u { color: var(--text-secondary); font-size: 13px; font-weight: 600; margin-left: 3px; }
-.status-badge { font-family: var(--sans-display); font-size: 14px; font-weight: 500; padding: 6px 14px; border-radius: var(--radius-sm); white-space: nowrap; border: 1px solid transparent; text-transform: uppercase; letter-spacing: 0.02em; }
+.bio-value .u { color: var(--text-secondary); font-size: 12px; font-weight: 600; margin-left: 3px; }
+.status-badge { font-family: var(--sans-display); font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: var(--radius-sm); white-space: nowrap; border: 1px solid transparent; text-transform: uppercase; letter-spacing: 0.02em; }
 .status-badge.ok { color: var(--good); background: var(--good-soft); border-color: color-mix(in srgb, var(--good) 20%, transparent); }
 .status-badge.bad { color: var(--high); background: var(--high-soft); border-color: color-mix(in srgb, var(--high) 20%, transparent); }
 .status-badge.warn { color: var(--low); background: var(--low-soft); border-color: color-mix(in srgb, var(--low) 20%, transparent); }
 .status-badge.na { color: var(--text-secondary); background: var(--panel-2); border-color: var(--border); }
 
 /* range bar */
-.rbar { margin-top: 22px; }
+.rbar { margin-top: 14px; }
 .rbar-track {
-  position: relative; height: 10px; border-radius: 100px; overflow: hidden; background: var(--page-tint);
+  position: relative; height: 8px; border-radius: 100px; overflow: hidden; background: var(--page-tint);
 }
 .rbar-seg { position: absolute; top: 0; bottom: 0; }
 .rbar-marker {
   position: absolute; top: 50%; transform: translate(-50%, -50%);
-  font-family: var(--sans-display); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums;
-  padding: 4px 10px; border-radius: var(--radius-pill); white-space: nowrap; box-shadow: var(--shadow-sm); z-index: 2;
+  font-family: var(--sans-display); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums;
+  padding: 2px 8px; border-radius: var(--radius-pill); white-space: nowrap; box-shadow: var(--shadow-sm); z-index: 2;
   border: 1px solid transparent;
   transition: all 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
@@ -391,9 +398,9 @@ body {
 .rbar-marker.amber { color: #ffffff; background: var(--low); border-color: var(--low); }
 .rbar-marker.red { color: #ffffff; background: var(--high); border-color: var(--high); }
 
-.rbar-labels { position: relative; height: 18px; margin-top: 8px; }
-.rbar-labels span { position: absolute; transform: translateX(-50%); color: var(--text-secondary); font-size: 13.5px; font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: 500; }
-.rbar-none { margin-top: 18px; color: var(--text-secondary); font-size: 15px; }
+.rbar-labels { position: relative; height: 14px; margin-top: 4px; }
+.rbar-labels span { position: absolute; transform: translateX(-50%); color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: 500; }
+.rbar-none { margin-top: 12px; color: var(--text-secondary); font-size: 13.5px; }
 
 /* tabs */
 .tabs { display: flex; gap: 6px; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px; }
