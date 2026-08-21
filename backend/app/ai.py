@@ -278,6 +278,33 @@ def _openai_chat(key: str, model: str, system: str, prompt: str) -> str:
 
 # ---------- Gemini ----------
 
+def _gemini_post_with_retry(model: str, key: str, body: dict, max_retries: int = 4) -> dict:
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            r = httpx.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                headers={"x-goog-api-key": key},
+                json=body,
+                timeout=120,
+            )
+            if r.status_code in (503, 429):
+                last_error = f"Gemini error {r.status_code}: {r.text[:300]}"
+                if attempt < max_retries - 1:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+            if r.status_code >= 400:
+                raise AIError(f"Gemini error {r.status_code}: {r.text[:300]}")
+            return r.json()
+        except httpx.RequestError as e:
+            last_error = str(e)
+            if attempt < max_retries - 1:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            raise AIError(f"Gemini connection error: {e}")
+    raise AIError(last_error or "Gemini request failed after retries")
+
+
 def _gemini_extract(key: str, model: str, data: bytes, mime: str, system_prompt: str) -> dict:
     b64 = base64.standard_b64encode(data).decode()
     body = {
@@ -291,15 +318,8 @@ def _gemini_extract(key: str, model: str, data: bytes, mime: str, system_prompt:
             }
         ],
     }
-    r = httpx.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-        headers={"x-goog-api-key": key},
-        json=body,
-        timeout=120,
-    )
-    if r.status_code >= 400:
-        raise AIError(f"Gemini error {r.status_code}: {r.text[:300]}")
-    text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+    res_json = _gemini_post_with_retry(model, key, body)
+    text = res_json["candidates"][0]["content"]["parts"][0]["text"]
     return _extract_json(text)
 
 
@@ -308,15 +328,8 @@ def _gemini_chat(key: str, model: str, system: str, prompt: str) -> str:
         "system_instruction": {"parts": [{"text": system}]},
         "contents": [{"parts": [{"text": prompt}]}],
     }
-    r = httpx.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-        headers={"x-goog-api-key": key},
-        json=body,
-        timeout=120,
-    )
-    if r.status_code >= 400:
-        raise AIError(f"Gemini error {r.status_code}: {r.text[:300]}")
-    return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+    res_json = _gemini_post_with_retry(model, key, body)
+    return res_json["candidates"][0]["content"]["parts"][0]["text"]
 
 
 # ---------- Dispatch ----------
@@ -399,16 +412,8 @@ def chat_with_usage(provider: str, model: Optional[str], key: Optional[str], sys
             "system_instruction": {"parts": [{"text": system}]},
             "contents": [{"parts": [{"text": prompt}]}],
         }
-        r = httpx.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-            headers={"x-goog-api-key": key},
-            json=body,
-            timeout=120,
-        )
+        res_json = _gemini_post_with_retry(model, key, body)
         latency = int((time.perf_counter() - start_time) * 1000)
-        if r.status_code >= 400:
-            raise AIError(f"Gemini error {r.status_code}: {r.text[:300]}")
-        res_json = r.json()
         text = res_json["candidates"][0]["content"]["parts"][0]["text"]
         usage = res_json.get("usageMetadata", {})
         return text, usage.get("promptTokenCount", 0), usage.get("candidatesTokenCount", 0), latency
@@ -483,16 +488,8 @@ def extract_with_usage(provider: str, model: Optional[str], key: Optional[str], 
                 }
             ],
         }
-        r = httpx.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-            headers={"x-goog-api-key": key},
-            json=body,
-            timeout=120,
-        )
+        res_json = _gemini_post_with_retry(model, key, body)
         latency = int((time.perf_counter() - start_time) * 1000)
-        if r.status_code >= 400:
-            raise AIError(f"Gemini error {r.status_code}: {r.text[:300]}")
-        res_json = r.json()
         text = res_json["candidates"][0]["content"]["parts"][0]["text"]
         usage = res_json.get("usageMetadata", {})
         return _extract_json(text), usage.get("promptTokenCount", 0), usage.get("candidatesTokenCount", 0), latency
