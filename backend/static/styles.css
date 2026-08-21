@@ -411,22 +411,86 @@ body {
 .status-badge.warn { color: var(--low); background: var(--low-soft); border-color: color-mix(in srgb, var(--low) 20%, transparent); }
 .status-badge.na { color: var(--text-secondary); background: var(--panel-2); border-color: var(--border); }
 
+/* ---------- shimmer skeletons ---------- */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, var(--panel-2) 25%, var(--page-tint) 50%, var(--panel-2) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite linear;
+  border-radius: var(--radius-sm);
+}
+
+.skeleton-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 18px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.skeleton-line { height: 14px; border-radius: 4px; }
+.skeleton-line.short { width: 35%; }
+.skeleton-line.medium { width: 60%; }
+.skeleton-line.title { height: 18px; width: 45%; }
+.skeleton-badge { width: 65px; height: 22px; border-radius: var(--radius-sm); }
+.skeleton-bar { height: 8px; border-radius: 100px; width: 100%; }
+
+/* ---------- category accordion transition ---------- */
+.cat-body-wrapper {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.22s cubic-bezier(0.2, 0.0, 0, 1.0);
+}
+.cat-body-wrapper.open {
+  grid-template-rows: 1fr;
+}
+.cat-body-inner {
+  overflow: hidden;
+}
+
 /* range bar */
 .rbar { margin-top: 14px; }
 .rbar-track {
   position: relative; height: 8px; border-radius: 100px; overflow: hidden; background: var(--page-tint);
 }
 .rbar-seg { position: absolute; top: 0; bottom: 0; }
+.rbar-marker-container {
+  position: absolute; top: 50%; transform: translate(-50%, -50%); z-index: 3;
+}
 .rbar-marker {
-  position: absolute; top: 50%; transform: translate(-50%, -50%);
+  position: relative;
   font-family: var(--sans-display); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums;
-  padding: 2px 8px; border-radius: var(--radius-pill); white-space: nowrap; box-shadow: var(--shadow-sm); z-index: 2;
-  border: 1px solid transparent;
-  transition: all 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+  padding: 2px 8px; border-radius: var(--radius-pill); white-space: nowrap; box-shadow: var(--shadow-sm);
+  border: 1px solid transparent; cursor: default;
+  transition: transform 0.15s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.15s ease;
 }
 .rbar-marker.green { color: #ffffff; background: var(--good); border-color: var(--good); }
 .rbar-marker.amber { color: #ffffff; background: var(--low); border-color: var(--low); }
 .rbar-marker.red { color: #ffffff; background: var(--high); border-color: var(--high); }
+
+.rbar-tooltip {
+  position: absolute; bottom: calc(100% + 7px); left: 50%; transform: translateX(-50%) translateY(4px);
+  background: var(--text-primary); color: var(--page); padding: 4px 8px; border-radius: 6px;
+  font-size: 11px; font-weight: 500; white-space: nowrap; pointer-events: none;
+  opacity: 0; visibility: hidden; box-shadow: var(--shadow);
+  transition: opacity 0.18s ease, transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0.18s;
+  z-index: 10;
+}
+.rbar-tooltip::after {
+  content: ""; position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+  border: 4px solid transparent; border-top-color: var(--text-primary);
+}
+.rbar-marker-container:hover .rbar-tooltip,
+.rbar-marker-container:focus-within .rbar-tooltip {
+  opacity: 1; visibility: visible; transform: translateX(-50%) translateY(0);
+}
+.bio-card:hover .rbar-marker { transform: scale(1.04); }
 
 .rbar-labels { position: relative; height: 14px; margin-top: 4px; }
 .rbar-labels span { position: absolute; transform: translateX(-50%); color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: 500; }

@@ -1085,8 +1085,44 @@ async function renderOverview(main) {
   if (infoBarItems.length > 0) {
     main.append(el("div", { class: "member-info-bar" }, infoBarItems));
   }
+  const skeletonMount = el("div", { class: "cat-body", style: "margin-top: 18px;" }, [
+    el("div", { class: "skeleton-card" }, [
+      el("div", { style: "display:flex;justify-content:space-between;align-items:center;" }, [
+        el("div", { class: "skeleton skeleton-line title" }),
+        el("div", { class: "skeleton skeleton-badge" }),
+      ]),
+      el("div", { class: "skeleton skeleton-line short" }),
+      el("div", { class: "skeleton skeleton-bar", style: "margin-top:6px;" }),
+    ]),
+    el("div", { class: "skeleton-card" }, [
+      el("div", { style: "display:flex;justify-content:space-between;align-items:center;" }, [
+        el("div", { class: "skeleton skeleton-line title" }),
+        el("div", { class: "skeleton skeleton-badge" }),
+      ]),
+      el("div", { class: "skeleton skeleton-line short" }),
+      el("div", { class: "skeleton skeleton-bar", style: "margin-top:6px;" }),
+    ]),
+    el("div", { class: "skeleton-card" }, [
+      el("div", { style: "display:flex;justify-content:space-between;align-items:center;" }, [
+        el("div", { class: "skeleton skeleton-line title" }),
+        el("div", { class: "skeleton skeleton-badge" }),
+      ]),
+      el("div", { class: "skeleton skeleton-line short" }),
+      el("div", { class: "skeleton skeleton-bar", style: "margin-top:6px;" }),
+    ]),
+    el("div", { class: "skeleton-card" }, [
+      el("div", { style: "display:flex;justify-content:space-between;align-items:center;" }, [
+        el("div", { class: "skeleton skeleton-line title" }),
+        el("div", { class: "skeleton skeleton-badge" }),
+      ]),
+      el("div", { class: "skeleton skeleton-line short" }),
+      el("div", { class: "skeleton skeleton-bar", style: "margin-top:6px;" }),
+    ]),
+  ]);
+  main.append(skeletonMount);
 
   const summary = await api(`/members/${member.id}/summary`);
+  skeletonMount.remove();
 
   if (!summary.length) {
     main.append(el("div", { class: "card empty-card empty" }, [
@@ -1205,7 +1241,11 @@ async function renderOverview(main) {
       const open = q || flt ? true : !state.collapsed[cat];
 
       const safeId = "cat-group-" + cat.toLowerCase().replace(/[^a-z0-9]/g, "-");
-      const header = el("button", { class: "cat-header" + (open ? " open" : ""), onclick: () => { state.collapsed[cat] = !state.collapsed[cat]; paint(); } }, [
+      const header = el("button", {
+        class: "cat-header" + (open ? " open" : ""),
+        "aria-expanded": open ? "true" : "false",
+        onclick: () => { state.collapsed[cat] = !state.collapsed[cat]; paint(); }
+      }, [
         el("span", { class: "chev" }, "▶"),
         el("span", { class: "cat-name" }, cat),
         el("span", { class: "cat-count" }, `(${items.length} biomarker${items.length > 1 ? "s" : ""})`),
@@ -1214,12 +1254,13 @@ async function renderOverview(main) {
         borderN ? el("span", { class: "count-pill borderline" }, `${borderN} borderline`) : null,
         inN ? el("span", { class: "count-pill in" }, `${inN} in range`) : null,
       ]);
-      const group = el("div", { class: "cat-group", id: safeId }, header);
-      if (open) {
-        const body = el("div", { class: "cat-body" });
-        items.forEach((s) => body.append(bioCard(member, s)));
-        group.append(body);
-      }
+      const bodyWrapper = el("div", { class: "cat-body-wrapper" + (open ? " open" : "") });
+      const bodyInner = el("div", { class: "cat-body-inner" });
+      const body = el("div", { class: "cat-body" });
+      items.forEach((s) => body.append(bioCard(member, s)));
+      bodyInner.append(body);
+      bodyWrapper.append(bodyInner);
+      const group = el("div", { class: "cat-group", id: safeId }, [header, bodyWrapper]);
       listMount.append(group);
     }
   }
@@ -1626,7 +1667,12 @@ function rangeBar(value, zones) {
   
   const wrap = el("div", { style: "position: relative;" });
   wrap.append(track);
-  wrap.append(el("div", { class: "rbar-marker " + vz.c, style: `left:${pos(value).toFixed(1)}%` }, fmtNum(value)));
+  
+  const markerContainer = el("div", { class: "rbar-marker-container", style: `left:${pos(value).toFixed(1)}%` }, [
+    el("div", { class: "rbar-marker " + vz.c }, fmtNum(value)),
+    el("div", { class: "rbar-tooltip" }, vz.label || ("Value: " + fmtNum(value))),
+  ]);
+  wrap.append(markerContainer);
 
   const labels = el("div", { class: "rbar-labels" });
   const seen = new Set();
