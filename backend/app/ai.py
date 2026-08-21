@@ -168,7 +168,7 @@ Rules: severity must be one of urgent/monitor/minor; trend and confidence fields
 DEFAULT_MODELS = {
     "anthropic": "claude-opus-4-8",
     "openai": "gpt-4o",
-    "gemini": "gemini-2.0-flash",
+    "gemini": "gemini-3.6-flash",
 }
 
 
