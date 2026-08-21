@@ -4406,41 +4406,211 @@ async function renderSettings(main) {
 
 
 
-// ---------------- ask AI modal ----------------
+// ---------------- markdown renderer ----------------
+function renderMarkdown(md) {
+  if (!md) return "";
+  let html = md
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  // Code blocks ```
+  html = html.replace(/```([\s\S]*?)```/g, (match, p1) => {
+    return `<pre class="md-pre"><code>${p1.trim()}</code></pre>`;
+  });
+
+  // Inline code `code`
+  html = html.replace(/`([^`]+)`/g, '<code class="md-code">$1</code>');
+
+  // Headers ###, ##, #
+  html = html.replace(/^### (.*$)/gim, '<h4 class="md-h4">$1</h4>');
+  html = html.replace(/^## (.*$)/gim, '<h3 class="md-h3">$1</h3>');
+  html = html.replace(/^# (.*$)/gim, '<h2 class="md-h2">$1</h2>');
+
+  // Bold & Italic
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  html = html.replace(/_([^_]+)_/g, '<em>$1</em>');
+
+  // Blockquotes
+  html = html.replace(/^> (.*$)/gim, '<blockquote class="md-quote">$1</blockquote>');
+
+  // Unordered lists
+  html = html.replace(/(?:^[ \t]*[\*\-][ \t]+(.+)$)+/gim, (match) => {
+    const items = match.split(/\n/).map((line) => {
+      const m = line.match(/^[ \t]*[\*\-][ \t]+(.+)$/);
+      return m ? `<li>${m[1]}</li>` : line;
+    }).join("");
+    return `<ul class="md-ul">${items}</ul>`;
+  });
+
+  // Ordered lists
+  html = html.replace(/(?:^[ \t]*\d+\.[ \t]+(.+)$)+/gim, (match) => {
+    const items = match.split(/\n/).map((line) => {
+      const m = line.match(/^[ \t]*\d+\.[ \t]+(.+)$/);
+      return m ? `<li>${m[1]}</li>` : line;
+    }).join("");
+    return `<ol class="md-ol">${items}</ol>`;
+  });
+
+  // Tables
+  html = html.replace(/((?:\|[^\n]+\|\n?)+)/g, (match) => {
+    const rows = match.trim().split("\n");
+    if (rows.length >= 2) {
+      let isHeader = true;
+      let tableHtml = '<div class="md-table-wrap"><table class="md-table">';
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i].trim();
+        if (/^\|[-:\s|]+\|$/.test(row)) {
+          isHeader = false;
+          continue;
+        }
+        const cells = row.split("|").slice(1, -1).map((c) => c.trim());
+        const tag = isHeader ? "th" : "td";
+        tableHtml += "<tr>" + cells.map((c) => `<${tag}>${c}</${tag}>`).join("") + "</tr>";
+      }
+      tableHtml += "</table></div>";
+      return tableHtml;
+    }
+    return match;
+  });
+
+  // Paragraphs
+  const blocks = html.split(/\n\n+/);
+  html = blocks.map((b) => {
+    b = b.trim();
+    if (!b) return "";
+    if (b.startsWith("<h") || b.startsWith("<ul") || b.startsWith("<ol") || b.startsWith("<pre") || b.startsWith("<blockquote") || b.startsWith("<div class=\"md-table")) {
+      return b;
+    }
+    return `<p class="md-p">${b.replace(/\n/g, "<br>")}</p>`;
+  }).join("\n");
+
+  return html;
+}
+
+// ---------------- ask AI sidebar drawer ----------------
 async function openAsk(member) {
   const summary = await api(`/members/${member.id}/summary`);
   if (!summary.length) { toast("No results to ask about yet"); return; }
 
   // Compute date range of summary items for context line
-  const dates = summary.map((s) => s.latest_date).filter(Boolean).sort();
+  const dates = summary.map((s) => s.latest_at).filter(Boolean).sort();
   let contextText = `Including ${summary.length} biomarker${summary.length > 1 ? "s" : ""} from the past year`;
   if (dates.length) {
-    const minD = formatDate(dates[0]);
-    const maxD = formatDate(dates[dates.length - 1]);
-    contextText = `Including tests from ${minD === maxD ? minD : minD + " – " + maxD} (${summary.length} biomarker${summary.length > 1 ? "s" : ""})`;
+    const minD = fmtDate(dates[0]);
+    const maxD = fmtDate(dates[dates.length - 1]);
+    contextText = `Including tests from ${minD === maxD ? minD : minD + " – " + maxD} (${summary.length} biomarkers)`;
   }
 
-  const q = el("textarea", { rows: 3, placeholder: "e.g. How has my cholesterol trended over the last year? Anything concerning or abnormal?" });
-  const answer = el("div");
+  const backdrop = el("div", { class: "drawer-backdrop" });
+  const drawer = el("div", { class: "drawer" });
 
-  const modal = openModal(`Ask AI about ${member.name}'s results`, [
-    el("div", { class: "ask-context-pill", style: "display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); background: var(--panel-2); border: 1px solid var(--border); padding: 6px 12px; border-radius: var(--radius-sm); margin-bottom: 12px;" }, [
-      el("span", { style: "font-size: 14px;" }, "📋"),
-      el("span", {}, contextText)
+  const closeDrawer = () => {
+    drawer.classList.remove("open");
+    backdrop.classList.remove("open");
+    setTimeout(() => { backdrop.remove(); }, 280);
+    document.removeEventListener("keydown", onKeyDown);
+  };
+
+  const onKeyDown = (e) => {
+    if (e.key === "Escape") closeDrawer();
+  };
+  document.addEventListener("keydown", onKeyDown);
+
+  backdrop.onclick = (e) => { if (e.target === backdrop) closeDrawer(); };
+
+  const head = el("div", { class: "drawer-head" }, [
+    el("h3", { class: "drawer-title" }, [
+      el("span", {}, "✨"),
+      el("span", {}, `Ask AI · ${member.name}`)
     ]),
-    el("div", { class: "field" }, [el("label", {}, "Your question"), q]),
-    answer,
-  ], [
-    el("button", { class: "btn", onclick: closeModal }, "Close"),
-    el("button", { class: "btn btn-primary", onclick: async () => {
-      if (!q.value.trim()) return toast("Type a question");
-      answer.innerHTML = ""; answer.append(el("div", { class: "ask-answer" }, [el("span", { class: "spinner" }), " Thinking…"]));
-      try {
-        const res = await api("/ask", { method: "POST", body: { member_id: member.id, question: q.value.trim() } });
-        answer.innerHTML = ""; answer.append(el("div", { class: "ask-answer" }, res.answer));
-      } catch (e) { answer.innerHTML = ""; answer.append(el("div", { class: "ask-answer warn" }, "Error: " + e.message + "\n\nCheck your AI provider & key in Settings.")); }
-    } }, "Ask"),
+    el("button", { class: "drawer-close", onclick: closeDrawer, "aria-label": "Close" }, "✕"),
   ]);
+
+  const contextBar = el("div", { class: "drawer-context" }, [
+    el("span", {}, "📋"),
+    el("span", {}, contextText),
+  ]);
+
+  const body = el("div", { class: "drawer-body" });
+
+  const emptyState = el("div", { class: "drawer-empty" }, [
+    el("div", { style: "font-size: 26px; margin-bottom: 6px;" }, "💬"),
+    el("div", { style: "font-weight: 500;" }, `Ask anything about ${member.name}'s lab results`),
+    el("div", { class: "drawer-suggestions" }, [
+      "Any concerning trends?",
+      "Explain out of range markers",
+      "Summary of lipid profile",
+      "Questions for my doctor",
+    ].map((prompt) => el("button", {
+      class: "drawer-chip",
+      onclick: () => { textarea.value = prompt; askQuestion(); }
+    }, prompt)))
+  ]);
+  body.append(emptyState);
+
+  const textarea = el("textarea", {
+    rows: 2,
+    placeholder: "Ask a question… (Enter to send, Shift+Enter for newline)",
+  });
+
+  const sendBtn = el("button", { class: "btn btn-primary", style: "min-height: 36px;", onclick: () => askQuestion() }, "Ask");
+
+  textarea.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      askQuestion();
+    }
+  });
+
+  const footer = el("div", { class: "drawer-footer" }, [
+    el("div", { class: "drawer-input-row" }, [textarea, sendBtn])
+  ]);
+
+  drawer.append(head, contextBar, body, footer);
+  backdrop.append(drawer);
+  $("#modal-root").append(backdrop);
+
+  requestAnimationFrame(() => {
+    backdrop.classList.add("open");
+    drawer.classList.add("open");
+    textarea.focus();
+  });
+
+  async function askQuestion() {
+    const qText = textarea.value.trim();
+    if (!qText) return;
+    if (emptyState.parentNode) emptyState.remove();
+
+    const qBubble = el("div", { class: "chat-bubble" }, [
+      el("div", { class: "chat-q" }, qText)
+    ]);
+    body.append(qBubble);
+
+    const aContent = el("div", { class: "chat-a md-content" }, [
+      el("span", { class: "spinner" }), " Thinking…"
+    ]);
+    const aBubble = el("div", { class: "chat-bubble" }, [aContent]);
+    body.append(aBubble);
+
+    textarea.value = "";
+    sendBtn.disabled = true;
+    body.scrollTop = body.scrollHeight;
+
+    try {
+      const res = await api("/ask", { method: "POST", body: { member_id: member.id, question: qText } });
+      aContent.innerHTML = renderMarkdown(res.answer);
+    } catch (e) {
+      aContent.className = "chat-a warn md-content";
+      aContent.innerHTML = "Error: " + (e.message || "Failed to get AI answer") + "\n\nCheck your AI provider & key in Settings.";
+    } finally {
+      sendBtn.disabled = false;
+      body.scrollTop = body.scrollHeight;
+      textarea.focus();
+    }
+  }
 }
 
 // ---------------- modal + member creation ----------------
