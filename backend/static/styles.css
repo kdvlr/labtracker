@@ -324,11 +324,41 @@ body {
 .filter-pill.active.in { background: var(--good); color: #fff; }
 
 /* ---------- search / toolbar ---------- */
-.toolbar { display: flex; gap: 12px; align-items: center; margin: 0 0 20px; }
+.toolbar { display: flex; gap: 12px; align-items: center; margin: 0 0 16px; }
 .search-box { flex: 1; position: relative; }
-.search-box input { width: 100%; padding: 12px 16px 12px 42px; border-radius: var(--radius-sm); border: 1px solid var(--baseline); background: var(--panel); }
+.search-box input { width: 100%; padding: 10px 16px 10px 42px; border-radius: var(--radius-sm); border: 1px solid var(--baseline); background: var(--panel); font-size: 15px; }
 .search-box input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .search-box .mag { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 16px; pointer-events: none; }
+
+.expand-all-btn {
+  font-size: 13px; font-weight: 500; padding: 9px 14px; white-space: nowrap;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text-secondary); cursor: pointer; transition: all 0.15s ease;
+}
+.expand-all-btn:hover { background: var(--hairline); color: var(--text-primary); border-color: var(--accent); }
+
+/* ---------- category jump rail ---------- */
+.cat-jump-rail {
+  display: flex; gap: 8px; overflow-x: auto; padding: 4px 0 14px; margin-bottom: 6px;
+  scrollbar-width: none; -ms-overflow-style: none; -webkit-overflow-scrolling: touch;
+}
+.cat-jump-rail::-webkit-scrollbar { display: none; }
+.cat-jump-pill {
+  display: inline-flex; align-items: center; gap: 6px; background: var(--panel);
+  border: 1px solid var(--border); border-radius: var(--radius-pill); padding: 5px 12px;
+  font-size: 13px; font-weight: 500; color: var(--text-secondary); cursor: pointer;
+  white-space: nowrap; transition: all 0.15s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.cat-jump-pill:hover { background: var(--hairline); border-color: var(--accent); color: var(--text-primary); transform: translateY(-1px); }
+.cat-jump-pill:active { transform: translateY(0); }
+.cat-jump-pill .cat-jump-count {
+  font-size: 11px; background: var(--panel-2); color: var(--muted); padding: 1px 6px; border-radius: 10px; font-weight: 600;
+}
+
+/* ---------- micro sparkline & meta ---------- */
+.bio-meta-row { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+.bio-count-pill { font-size: 11px; font-weight: 500; color: var(--muted); background: var(--panel-2); padding: 1px 6px; border-radius: 4px; }
+.bio-spark-wrap { display: flex; align-items: center; justify-content: center; margin-right: 2px; }
 
 /* ---------- category group ---------- */
 .cat-group { border-top: 1px solid var(--border); }

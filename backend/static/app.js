@@ -1102,10 +1102,27 @@ async function renderOverview(main) {
   main.append(analysisMount);
   renderHealthAnalysis(analysisMount, member);
 
-  // Search on top.
+  // Search + Expand/Collapse All toggle in toolbar.
   const search = el("input", { type: "text", placeholder: "Search biomarkers…", value: state.search || "" });
   search.addEventListener("input", () => { state.search = search.value; paint(); });
-  main.append(el("div", { class: "toolbar" }, el("div", { class: "search-box" }, [el("span", { class: "mag" }, "⌕"), search])));
+
+  const toggleAllBtn = el("button", { class: "expand-all-btn", onclick: () => {
+    const q = (state.search || "").trim().toLowerCase();
+    const flt = state.statusFilter;
+    let rows = q ? summary.filter((s) => s.name.toLowerCase().includes(q)) : summary.slice();
+    if (flt) rows = rows.filter((s) => statusOf(s) === flt);
+    const byCat = {};
+    for (const s of rows) (byCat[s.category || "Other"] ||= []).push(s);
+    const cats = Object.keys(byCat);
+    const allOpen = cats.every((cat) => !state.collapsed[cat]);
+    for (const cat of cats) state.collapsed[cat] = allOpen;
+    paint();
+  } }, "⇲ Expand All");
+
+  main.append(el("div", { class: "toolbar" }, [
+    el("div", { class: "search-box" }, [el("span", { class: "mag" }, "⌕"), search]),
+    toggleAllBtn,
+  ]));
 
   // Overall status filter below — same pill UI as the category indicators.
   const totals = { red: 0, amber: 0, green: 0 };
@@ -1116,6 +1133,9 @@ async function renderOverview(main) {
     onclick: () => { state.statusFilter = state.statusFilter === key ? null : key; paint(); },
   }, text);
   main.append(summaryStrip);
+
+  const jumpRail = el("div", { class: "cat-jump-rail" });
+  main.append(jumpRail);
 
   const listMount = el("div");
   main.append(listMount);
@@ -1128,6 +1148,7 @@ async function renderOverview(main) {
     if (totals.green) summaryStrip.append(chip("green", "in", `${totals.green} in range`));
 
     listMount.innerHTML = "";
+    jumpRail.innerHTML = "";
     const q = (state.search || "").trim().toLowerCase();
     const flt = state.statusFilter;
     let rows = q ? summary.filter((s) => s.name.toLowerCase().includes(q)) : summary.slice();
@@ -1135,12 +1156,41 @@ async function renderOverview(main) {
     if (!rows.length) {
       const msg = flt ? `No biomarkers are ${{ red: "out of range", amber: "borderline", green: "in range" }[flt]}${q ? " matching your search" : ""}.` : "No biomarkers match your search.";
       listMount.append(el("div", { class: "overview-empty-cat" }, msg));
+      toggleAllBtn.style.display = "none";
       return;
     }
+    toggleAllBtn.style.display = "";
 
     const byCat = {};
     for (const s of rows) (byCat[s.category || "Other"] ||= []).push(s);
     const cats = Object.keys(byCat).sort((a, b) => (a === "Other") - (b === "Other") || a.localeCompare(b));
+
+    const allOpen = cats.every((cat) => !state.collapsed[cat]);
+    toggleAllBtn.textContent = allOpen ? "⇱ Collapse All" : "⇲ Expand All";
+
+    // Build sticky category jump rail
+    if (cats.length > 1) {
+      for (const cat of cats) {
+        const catCount = byCat[cat].length;
+        const pill = el("button", {
+          class: "cat-jump-pill",
+          onclick: (e) => {
+            e.preventDefault();
+            state.collapsed[cat] = false;
+            paint();
+            const safeId = "cat-group-" + cat.toLowerCase().replace(/[^a-z0-9]/g, "-");
+            const targetEl = document.getElementById(safeId);
+            if (targetEl) {
+              targetEl.scrollIntoView({ behavior: "smooth", block: "start" });
+            }
+          }
+        }, [
+          el("span", {}, cat),
+          el("span", { class: "cat-jump-count" }, String(catCount))
+        ]);
+        jumpRail.append(pill);
+      }
+    }
 
     for (const cat of cats) {
       const items = byCat[cat].sort((a, b) => a.name.localeCompare(b.name));
@@ -1154,6 +1204,7 @@ async function renderOverview(main) {
       // A search or a status filter forces every matching group open.
       const open = q || flt ? true : !state.collapsed[cat];
 
+      const safeId = "cat-group-" + cat.toLowerCase().replace(/[^a-z0-9]/g, "-");
       const header = el("button", { class: "cat-header" + (open ? " open" : ""), onclick: () => { state.collapsed[cat] = !state.collapsed[cat]; paint(); } }, [
         el("span", { class: "chev" }, "▶"),
         el("span", { class: "cat-name" }, cat),
@@ -1163,7 +1214,7 @@ async function renderOverview(main) {
         borderN ? el("span", { class: "count-pill borderline" }, `${borderN} borderline`) : null,
         inN ? el("span", { class: "count-pill in" }, `${inN} in range`) : null,
       ]);
-      const group = el("div", { class: "cat-group" }, header);
+      const group = el("div", { class: "cat-group", id: safeId }, header);
       if (open) {
         const body = el("div", { class: "cat-body" });
         items.forEach((s) => body.append(bioCard(member, s)));
@@ -1452,6 +1503,44 @@ async function renderHousehold(main) {
   });
 }
 
+function miniSparkline(points, color = "var(--accent)") {
+  if (!points || points.length < 2) return null;
+  const min = Math.min(...points);
+  const max = Math.max(...points);
+  const range = (max - min) || 1;
+  const w = 44, h = 15, pad = 2;
+  const coords = points.map((p, i) => {
+    const x = pad + (i / (points.length - 1)) * (w - 2 * pad);
+    const y = h - pad - ((p - min) / range) * (h - 2 * pad);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const pathD = `M ${coords.join(" L ")}`;
+  const lastCoord = coords[coords.length - 1].split(",");
+
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  svg.setAttribute("class", "mini-sparkline");
+  svg.setAttribute("style", `width:${w}px;height:${h}px;overflow:visible;vertical-align:middle;flex:none;`);
+
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", pathD);
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", color);
+  path.setAttribute("stroke-width", "1.75");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  svg.appendChild(path);
+
+  const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+  dot.setAttribute("cx", lastCoord[0]);
+  dot.setAttribute("cy", lastCoord[1]);
+  dot.setAttribute("r", "2");
+  dot.setAttribute("fill", color);
+  svg.appendChild(dot);
+
+  return svg;
+}
+
 function bioCard(member, s) {
   const qual = isQualitative(s);
   const v = s.latest?.value_canonical;
@@ -1461,13 +1550,25 @@ function bioCard(member, s) {
   const badgeText = qual
     ? (s.latest.flag === "H" ? "Abnormal" : s.latest.flag === "L" ? "Abnormal" : "Recorded")
     : (z ? z.label : "No range");
+
+  let sparkColor = "var(--accent)";
+  if (c === "red") sparkColor = "var(--high)";
+  else if (c === "amber") sparkColor = "var(--low)";
+  else if (c === "green") sparkColor = "var(--good)";
+
+  const sparkEl = !qual && s.spark && s.spark.length >= 2 ? miniSparkline(s.spark, sparkColor) : null;
+
   return el("div", { class: "bio-card", onclick: () => openDetail(member, s.test_type_id) }, [
     el("div", { class: "bio-card-head" }, [
       el("div", {}, [
         el("div", { class: "bio-name" }, s.name),
-        el("div", { class: "bio-date" }, fmtDate(s.latest_at)),
+        el("div", { class: "bio-meta-row" }, [
+          el("span", { class: "bio-date" }, fmtDate(s.latest_at)),
+          s.n > 1 ? el("span", { class: "bio-count-pill" }, `${s.n} tests`) : null,
+        ]),
       ]),
       el("div", { class: "bio-right" }, [
+        sparkEl ? el("div", { class: "bio-spark-wrap", title: `${s.n} historical readings` }, sparkEl) : null,
         el("div", { class: "bio-value " + c }, qual
           ? [s.latest.value_text]
           : [fmtVal(v, s.latest?.qualifier), s.canonical_unit ? el("span", { class: "u" }, s.canonical_unit) : null]),
