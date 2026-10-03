@@ -4465,13 +4465,14 @@ function buildAppearanceSection() {
 async function renderSettings(main) {
   main.innerHTML = "";
   document.querySelectorAll('[data-view="settings"]').forEach((b) => b.classList.add("active"));
-  const s = await api("/settings");
-  const categories = (await api("/categories").catch(() => ({ categories: [] }))).categories || [];
+  try {
+    const s = await api("/settings");
+    const categories = (await api("/categories").catch(() => ({ categories: [] }))).categories || [];
 
-  main.append(el("div", { class: "page-head" }, el("div", {}, [
-    el("h1", { class: "page-title" }, "Settings"),
-    el("p", { class: "page-sub" }, "Admin for this install — AI provider, privacy, and the categorisation queue."),
-  ])));
+    main.append(el("div", { class: "page-head" }, el("div", {}, [
+      el("h1", { class: "page-title" }, "Settings"),
+      el("p", { class: "page-sub" }, "Admin for this install — AI provider, privacy, and the categorisation queue."),
+    ])));
 
   // ---- 1. Work that needs a person -------------------------------------
   // Top of the page, and open when there is a backlog: it is the only section
@@ -4646,6 +4647,8 @@ async function renderSettings(main) {
   buildModelEvaluationPanel(evalContent);
   advancedContent.append(createCollapsible("Model evaluation suite", "", evalContent, false));
 
+  const advancedSection = createCollapsible("Advanced", "", advancedContent, false);
+
   // ---- 3. Appearance & Themes (Nivas synced) ----------------------------
   const appearanceContent = buildAppearanceSection();
   const currentThemeObj = THEME_STYLES.find((t) => t.id === getStoredThemeStyle());
@@ -4685,6 +4688,28 @@ async function renderSettings(main) {
         render();
       } }, "Add to Home Screen"),
     ]));
+  }
+  } catch (err) {
+    console.error("Failed to render settings:", err);
+    main.innerHTML = "";
+    main.append(el("div", { class: "page-head" }, el("div", {}, [
+      el("h1", { class: "page-title" }, "Settings"),
+      el("p", { class: "page-sub" }, "Admin for this install — AI provider, privacy, and the categorisation queue."),
+    ])));
+    if (err.status === 403 || err.status === 401 || err.message?.includes("PIN")) {
+      main.append(el("div", { class: "card", style: "padding: 24px; margin-top: 16px; max-width: 560px;" }, [
+        el("div", { style: "font-size: 28px; margin-bottom: 8px;" }, "🔒"),
+        el("h3", { style: "margin: 0 0 8px;" }, "Settings Locked"),
+        el("p", { class: "modal-lead" }, "Enter the PIN to view and change settings on this device."),
+        el("button", { class: "btn btn-primary", onclick: () => openUnlockModal(() => renderSettings(main)) }, "Enter PIN")
+      ]));
+    } else {
+      main.append(el("div", { class: "card warn", style: "padding: 20px; margin-top: 16px;" }, [
+        el("strong", {}, "Failed to load settings"),
+        el("p", { style: "margin: 8px 0;" }, err.message || String(err)),
+        el("button", { class: "btn btn-primary", style: "margin-top: 10px;", onclick: () => renderSettings(main) }, "Retry")
+      ]));
+    }
   }
 }
 
