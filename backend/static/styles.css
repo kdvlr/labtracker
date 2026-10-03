@@ -1,108 +1,220 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+/* =============================================================
+   Themes & Tokens (synced with Nivas)
+   Themes: 'material' (default) | 'glass' | 'woodland'
+   Appearance: 'auto' | 'light' | 'dark'
+   Fonts: 'outfit' | 'roboto' | 'nunito' | 'quicksand' | 'inter' | 'arial'
+   ============================================================= */
 
+/* Font family choices */
 :root {
-  /* Green/amber/red are RESERVED for clinical status. The interface accent is
-     therefore a rich dark greige/taupe to create a calm, neutral clinical feel.
-     Neutrals use low-glare #EFEFEF background with pure white panels. */
-  --page: #efefef;
-  --page-tint: #e5e5e5;
-  --panel: #ffffff;
-  --panel-2: #e0e0e0;
-  --sidebar: #f5f5f5;
-  --text-primary: #161d24;
-  --text-secondary: #4a4d50;
-  --muted: #6f7275;
-  --grid: #e2e2e2;
-  --baseline: #a5a5a5;
-  --border: rgba(0, 0, 0, 0.08);
-  --hairline: rgba(0, 0, 0, 0.04);
-  --accent: #5c554e;
-  --accent-2: #423d38;
-  --accent-soft: #eae7e4;
+  --sans-display: 'Outfit', 'Inter', system-ui, -apple-system, sans-serif;
+  --sans-body: 'Outfit', 'Inter', system-ui, -apple-system, sans-serif;
+  --radius: 20px;
+  --radius-sm: 12px;
+  --radius-pill: 100px;
+  --tap: 44px;
+  --card-blur: none;
+
+  /* Clinical Status Invariant: Green/amber/red are strictly reserved for clinical values */
   --good: #2b6b47;
   --good-soft: #dcefe3;
   --high: #b03a30;
   --high-soft: #faeae8;
   --low: #8a5713;
   --low-soft: #fbf0dc;
-  /* Text laid on a solid --good/--low/--high fill. The status palette flips
-     between themes — dark, saturated hues in light mode; pale pastels in dark —
-     so the ink has to flip with it. White on the dark hues reads 4.8-6.4:1;
-     white on the pastels would be 1.7-2.0:1, which is why this is a variable
-     and not just "#fff". */
   --chip-ink: #ffffff;
-  /* "Stable" is the one pill that cannot follow --chip-ink. A yellow dark
-     enough to carry white text is the palette's #8a5713, which reads brown.
-     A yellow bright enough to read as yellow can only take dark ink. So this
-     pill inverts: bright fill, dark ink — always, in both themes.
-     Brightening costs edge separation (this fill is 1.4:1 against the pale
-     monitor card it sits on), so the border does that job instead at 4.6-6.1:1. */
   --trend-stable-fill: #f5c542;
   --trend-stable-border: #8a5713;
   --trend-stable-ink: #10161c;
   --range-in: #2b6b47;
   --range-out: #faeae8;
   --range-warn: #fbf0dc;
-  /* Chart zone bands */
   --band-green: #e2efe6;
   --band-amber: #fbf0dc;
   --band-red: #faeae8;
-  --radius: 20px;
-  --radius-sm: 14px;
-  --radius-pill: 100px;
-  --tap: 48px;
-  --sans-display: "Google Sans", "Product Sans", "Inter", system-ui, -apple-system, sans-serif;
-  --sans-body: "Google Sans", "Product Sans", "Inter", system-ui, -apple-system, sans-serif;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow: 0 1px 3px rgba(0, 0, 0, 0.05), 0 6px 16px rgba(0, 0, 0, 0.03);
-  --shadow-lg: 0 2px 8px rgba(0, 0, 0, 0.06), 0 16px 40px rgba(0, 0, 0, 0.08);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    /* Same rule inverted for a dark surface: blue accent, status hues reserved.
-       Every value checked against --panel; accent 7.3:1, status all ≥ 8:1. */
-    --page: #10151a;
-    --page-tint: #151c23;
-    --panel: #19212a;
-    --panel-2: #232d38;
-    --sidebar: #151c23;
-    --text-primary: #eef3f7;
-    --text-secondary: #bcc9d6;
-    --muted: #8b98a5;
-    --grid: #2a3540;
-    --baseline: #55636f;
-    --border: rgba(160, 190, 220, 0.18);
-    --hairline: rgba(160, 190, 220, 0.10);
-    --accent: #7db3e8;
-    --accent-2: #a3cbf0;
-    --accent-soft: #16304a;
-    --good: #7fd39a;
-    --good-soft: rgba(43, 107, 71, 0.42);
-    --high: #f2a49b;
-    --high-soft: rgba(150, 52, 44, 0.42);
-    --low: #e9c07a;
-    --low-soft: rgba(120, 78, 22, 0.42);
-    --chip-ink: #10161c;   /* near-black on the pastel fills: 6.2-10.7:1 */
-    /* Dark mode's --low is already a bright pastel yellow carrying dark ink at
-       10.7:1, so the stable pill needs no inversion here — only the border
-       differs, matching its own fill since the dark cards give it 8:1 anyway. */
-    --trend-stable-fill: #e9c07a;
-    --trend-stable-border: #e9c07a;
-    --range-in: #7fd39a;
-    --range-out: #7c2b25;
-    --range-warn: #5c3d00;
-    /* Tints, not the solid range-bar fills (which become heavy blocks here).
-       These are more saturated than the theme's pastel --high/--low: a pale
-       pink at low alpha over a dark green-grey panel blends to near-neutral
-       grey and loses the red entirely, so the hue needs chroma to survive. */
-    --band-green: rgba(120, 230, 90, 0.11);
-    --band-amber: rgba(255, 170, 40, 0.15);
-    --band-red: rgba(235, 80, 70, 0.16);
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --shadow: 0 4px 16px rgba(0, 0, 0, 0.5), 0 8px 32px rgba(125, 179, 232, 0.06);
-    --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.6), 0 16px 48px rgba(125, 179, 232, 0.1);
-  }
+[data-font='outfit'] { --sans-display: 'Outfit', sans-serif; --sans-body: 'Outfit', sans-serif; }
+[data-font='roboto'] { --sans-display: 'Roboto', sans-serif; --sans-body: 'Roboto', sans-serif; }
+[data-font='nunito'] { --sans-display: 'Nunito', sans-serif; --sans-body: 'Nunito', sans-serif; }
+[data-font='quicksand'] { --sans-display: 'Quicksand', sans-serif; --sans-body: 'Quicksand', sans-serif; }
+[data-font='inter'] { --sans-display: 'Inter', system-ui, sans-serif; --sans-body: 'Inter', system-ui, sans-serif; }
+[data-font='arial'] { --sans-display: Arial, Helvetica, sans-serif; --sans-body: Arial, Helvetica, sans-serif; }
+
+/* Clinical status tokens in dark mode */
+html.dark {
+  --good: #7fd39a;
+  --good-soft: rgba(43, 107, 71, 0.42);
+  --high: #f2a49b;
+  --high-soft: rgba(150, 52, 44, 0.42);
+  --low: #e9c07a;
+  --low-soft: rgba(120, 78, 22, 0.42);
+  --chip-ink: #10161c;
+  --trend-stable-fill: #e9c07a;
+  --trend-stable-border: #e9c07a;
+  --range-in: #7fd39a;
+  --range-out: #7c2b25;
+  --range-warn: #5c3d00;
+  --band-green: rgba(120, 230, 90, 0.11);
+  --band-amber: rgba(255, 170, 40, 0.15);
+  --band-red: rgba(235, 80, 70, 0.16);
+}
+
+/* ---------------- 1. Material You Theme (Default) ---------------- */
+:root,
+html[data-theme='material']:not(.dark) {
+  --page: #f2eee1;
+  --page-tint: #e7e0cd;
+  --panel: #faf6ea;
+  --panel-2: #f0ebdc;
+  --sidebar: #e7e0cd;
+  --text-primary: #2a2619;
+  --text-secondary: #6b6350;
+  --muted: #97907a;
+  --grid: #ddd5bf;
+  --baseline: #97907a;
+  --border: rgba(151, 144, 122, 0.32);
+  --hairline: rgba(151, 144, 122, 0.15);
+  --accent: #00796b;
+  --accent-2: #004d40;
+  --accent-soft: #b4efe1;
+  --tint-a: rgba(45, 212, 191, 0.10);
+  --tint-b: rgba(251, 146, 60, 0.09);
+  --tint-c: rgba(96, 165, 250, 0.08);
+  --tint-d: rgba(244, 114, 182, 0.07);
+  --shadow-sm: 0 1px 2px rgba(60, 50, 20, 0.08);
+  --shadow: 0 1px 3px rgba(60, 50, 20, 0.10), 0 2px 8px rgba(60, 50, 20, 0.06);
+  --shadow-lg: 0 4px 16px rgba(60, 50, 20, 0.14);
+}
+
+html[data-theme='material'].dark,
+html.dark:not([data-theme]) {
+  --page: #0e1512;
+  --page-tint: #141c18;
+  --panel: #1a221e;
+  --panel-2: #212a25;
+  --sidebar: #141c18;
+  --text-primary: #dfe5df;
+  --text-secondary: #a5b3aa;
+  --muted: #75847b;
+  --grid: #2a342e;
+  --baseline: #75847b;
+  --border: rgba(117, 132, 123, 0.32);
+  --hairline: rgba(117, 132, 123, 0.16);
+  --accent: #62dbc4;
+  --accent-2: #8bf0dc;
+  --accent-soft: #0c5347;
+  --tint-a: rgba(45, 212, 191, 0.08);
+  --tint-b: rgba(251, 146, 60, 0.07);
+  --tint-c: rgba(96, 165, 250, 0.07);
+  --tint-d: rgba(244, 114, 182, 0.06);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow: 0 2px 6px rgba(0, 0, 0, 0.4), 0 6px 20px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+/* ---------------- 2. Liquid Glass Theme ---------------- */
+html[data-theme='glass']:not(.dark) {
+  --page: #e9f1f7;
+  --page-tint: #d8e5ef;
+  --panel: rgba(255, 255, 255, 0.65);
+  --panel-2: rgba(255, 255, 255, 0.48);
+  --sidebar: rgba(233, 241, 247, 0.78);
+  --text-primary: #16283a;
+  --text-secondary: #4d6478;
+  --muted: #7e94a8;
+  --grid: rgba(110, 140, 165, 0.22);
+  --baseline: #7e94a8;
+  --border: rgba(255, 255, 255, 0.70);
+  --hairline: rgba(110, 140, 165, 0.22);
+  --accent: #007aff;
+  --accent-2: #0056b3;
+  --accent-soft: #d3e6ff;
+  --tint-a: rgba(96, 165, 250, 0.38);
+  --tint-b: rgba(56, 189, 248, 0.32);
+  --tint-c: rgba(129, 140, 248, 0.30);
+  --tint-d: rgba(34, 211, 238, 0.28);
+  --shadow-sm: 0 2px 8px rgba(30, 80, 140, 0.08);
+  --shadow: 0 8px 32px rgba(30, 80, 140, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  --shadow-lg: 0 16px 48px rgba(30, 80, 140, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  --card-blur: blur(16px) saturate(1.4);
+}
+
+html[data-theme='glass'].dark {
+  --page: #0a1220;
+  --page-tint: #0f1c30;
+  --panel: rgba(24, 36, 52, 0.60);
+  --panel-2: rgba(255, 255, 255, 0.08);
+  --sidebar: rgba(10, 18, 32, 0.82);
+  --text-primary: #e2eaf4;
+  --text-secondary: #a5b8cc;
+  --muted: #7590ab;
+  --grid: rgba(255, 255, 255, 0.10);
+  --baseline: #7590ab;
+  --border: rgba(255, 255, 255, 0.14);
+  --hairline: rgba(255, 255, 255, 0.06);
+  --accent: #64b1ff;
+  --accent-2: #99cbff;
+  --accent-soft: rgba(0, 74, 134, 0.5);
+  --tint-a: rgba(96, 165, 250, 0.16);
+  --tint-b: rgba(56, 189, 248, 0.13);
+  --tint-c: rgba(129, 140, 248, 0.13);
+  --tint-d: rgba(34, 211, 238, 0.11);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.60), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  --card-blur: blur(16px) saturate(1.4);
+}
+
+/* ---------------- 3. Woodland Theme ---------------- */
+html[data-theme='woodland']:not(.dark) {
+  --page: #F5F5F7;
+  --page-tint: #ede9e1;
+  --panel: #EFEFEF;
+  --panel-2: #e5e2da;
+  --sidebar: #ede9e1;
+  --text-primary: #3e2723;
+  --text-secondary: #6d4c41;
+  --muted: #8d6e63;
+  --grid: #d7d3c8;
+  --baseline: #8d6e63;
+  --border: rgba(141, 110, 99, 0.22);
+  --hairline: rgba(141, 110, 99, 0.10);
+  --accent: #8d6e63;
+  --accent-2: #6d4c41;
+  --accent-soft: #ede7f6;
+  --tint-a: rgba(141, 110, 99, 0.08);
+  --tint-b: rgba(215, 204, 200, 0.10);
+  --tint-c: rgba(238, 231, 213, 0.10);
+  --tint-d: rgba(121, 85, 72, 0.06);
+  --shadow-sm: 0 1px 2px rgba(62, 39, 35, 0.10);
+  --shadow: 0 1px 3px rgba(62, 39, 35, 0.12), 0 1px 2px rgba(62, 39, 35, 0.20);
+  --shadow-lg: 0 4px 16px rgba(62, 39, 35, 0.16);
+}
+
+html[data-theme='woodland'].dark {
+  --page: #1b1614;
+  --page-tint: #251d1a;
+  --panel: #2d2421;
+  --panel-2: #3a2e2a;
+  --sidebar: #151110;
+  --text-primary: #efebe9;
+  --text-secondary: #d7ccc8;
+  --muted: #a1887f;
+  --grid: #483a34;
+  --baseline: #a1887f;
+  --border: rgba(215, 204, 200, 0.16);
+  --hairline: rgba(215, 204, 200, 0.08);
+  --accent: #d7ccc8;
+  --accent-2: #efebe9;
+  --accent-soft: #4e342e;
+  --tint-a: rgba(141, 110, 99, 0.06);
+  --tint-b: rgba(62, 39, 35, 0.08);
+  --tint-c: rgba(121, 85, 72, 0.07);
+  --tint-d: rgba(45, 36, 33, 0.10);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow: 0 2px 6px rgba(0, 0, 0, 0.45), 0 6px 18px rgba(0, 0, 0, 0.30);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.55);
 }
 
 * { box-sizing: border-box; }
@@ -115,7 +227,14 @@ html, body {
   font-size: 14.5px;
   line-height: 1.5;
   color: var(--text-primary);
-  background: var(--page);
+  background-color: var(--page);
+  background-image:
+    radial-gradient(42% 55% at 8% 4%, var(--tint-a) 0%, transparent 100%),
+    radial-gradient(38% 48% at 92% 8%, var(--tint-b) 0%, transparent 100%),
+    radial-gradient(45% 52% at 85% 92%, var(--tint-c) 0%, transparent 100%),
+    radial-gradient(40% 55% at 10% 92%, var(--tint-d) 0%, transparent 100%);
+  background-attachment: fixed;
+  transition: background-color 0.25s ease, color 0.25s ease;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   -webkit-text-size-adjust: 100%;
@@ -125,6 +244,21 @@ body {
   display: grid;
   grid-template-columns: 230px 1fr;
   height: 100vh;
+}
+
+/* Glass blur effects when liquid glass theme is active */
+html[data-theme='glass'] .card,
+html[data-theme='glass'] .bio-card,
+html[data-theme='glass'] .sidebar,
+html[data-theme='glass'] .drawer,
+html[data-theme='glass'] .modal,
+html[data-theme='glass'] .jump-rail-bar,
+html[data-theme='glass'] .problem-card,
+html[data-theme='glass'] .chat-a,
+html[data-theme='glass'] .analysis-hero,
+html[data-theme='glass'] .collapsible-head {
+  backdrop-filter: var(--card-blur, blur(16px) saturate(1.4));
+  -webkit-backdrop-filter: var(--card-blur, blur(16px) saturate(1.4));
 }
 
 /* ---------- sidebar ---------- */
@@ -1561,6 +1695,251 @@ textarea { resize: vertical; }
 .info-bar-item strong {
   color: var(--text-secondary);
   font-weight: 600;
+}
+
+/* ---------- appearance & themes settings UI (Nivas synced) ---------- */
+.appearance-settings-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 4px 0;
+}
+.setting-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.setting-group-title {
+  font-family: var(--sans-display);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.setting-group-sub {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  margin-top: -4px;
+}
+.theme-style-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+.theme-card-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  padding: 14px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--panel);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+  box-shadow: var(--shadow-sm);
+  color: var(--text-primary);
+}
+.theme-card-choice:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow);
+}
+.theme-card-choice.active {
+  border-color: var(--accent);
+  background: var(--panel-2);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.theme-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-bottom: 6px;
+}
+.theme-card-icon {
+  font-size: 18px;
+}
+.theme-card-title {
+  font-family: var(--sans-display);
+  font-size: 14px;
+  font-weight: 600;
+  flex: 1;
+}
+.theme-card-badge {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 2px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: #fff;
+}
+.theme-card-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  margin-bottom: 12px;
+  flex: 1;
+}
+.theme-preview-palette {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.palette-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+}
+.theme-card-choice.material .palette-dot.p-bg { background: #f2eee1; }
+.theme-card-choice.material .palette-dot.p-card { background: #faf6ea; }
+.theme-card-choice.material .palette-dot.p-accent { background: #00796b; }
+
+.theme-card-choice.glass .palette-dot.p-bg { background: #e9f1f7; }
+.theme-card-choice.glass .palette-dot.p-card { background: rgba(255, 255, 255, 0.7); }
+.theme-card-choice.glass .palette-dot.p-accent { background: #007aff; }
+
+.theme-card-choice.woodland .palette-dot.p-bg { background: #F5F5F7; }
+.theme-card-choice.woodland .palette-dot.p-card { background: #EFEFEF; }
+.theme-card-choice.woodland .palette-dot.p-accent { background: #8d6e63; }
+
+.choice-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.choice-pill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 16px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-secondary);
+  font-family: var(--sans-display);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.choice-pill-btn:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+.choice-pill-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+.choice-pill-icon {
+  font-size: 15px;
+}
+
+.font-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+}
+.font-choice-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--panel);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  color: var(--text-primary);
+}
+.font-choice-card:hover {
+  border-color: var(--accent);
+  background: var(--panel-2);
+}
+.font-choice-card.active {
+  border-color: var(--accent);
+  background: var(--panel-2);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.font-choice-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin-bottom: 2px;
+}
+.font-choice-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+.font-choice-check {
+  font-size: 12px;
+  color: var(--accent);
+  font-weight: 700;
+}
+.font-choice-sample {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+}
+
+.accent-swatch-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+.accent-swatch {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  padding: 0;
+}
+.accent-swatch:hover {
+  transform: scale(1.1);
+}
+.accent-swatch.active {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px var(--accent);
+  transform: scale(1.08);
+}
+.swatch-check {
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+.accent-custom-color {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 2px solid var(--border);
+  border-radius: 50%;
+  cursor: pointer;
+  background: none;
+  overflow: hidden;
+}
+.accent-custom-color::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+.accent-custom-color::-webkit-color-swatch {
+  border: none;
+  border-radius: 50%;
 }
 
 

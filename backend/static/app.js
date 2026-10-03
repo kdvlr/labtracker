@@ -48,6 +48,143 @@ function getStateSnapshot() {
 
 let isPopStateNavigation = false;
 
+// ---------------- Nivas-compatible Theme Engine ----------------
+const THEME_STYLES = [
+  { id: "material", icon: "✨", label: "Material You", desc: "Warm cream, emerald-teal & soft elevation" },
+  { id: "glass", icon: "🫧", label: "Liquid Glass", desc: "Translucent frosted glass & azure blue" },
+  { id: "woodland", icon: "🌲", label: "Woodland", desc: "Warm neutrals, cedar brown & earthy contrast" },
+];
+
+const APPEARANCES = [
+  { id: "auto", icon: "⏰", label: "Auto (6 AM – 7 PM)" },
+  { id: "light", icon: "☀️", label: "Light" },
+  { id: "dark", icon: "🌙", label: "Dark" },
+];
+
+const FONTS = [
+  { id: "outfit", label: "Outfit", stack: "'Outfit', sans-serif" },
+  { id: "roboto", label: "Roboto", stack: "'Roboto', sans-serif" },
+  { id: "nunito", label: "Nunito", stack: "'Nunito', sans-serif" },
+  { id: "quicksand", label: "Quicksand", stack: "'Quicksand', sans-serif" },
+  { id: "inter", label: "Inter", stack: "'Inter', sans-serif" },
+  { id: "arial", label: "Arial", stack: "Arial, Helvetica, sans-serif" },
+];
+
+const ACCENT_PRESETS = [
+  { label: "Theme Default", value: null },
+  { label: "Teal Emerald", value: "#00796b" },
+  { label: "Azure Blue", value: "#007aff" },
+  { label: "Cedar Brown", value: "#8d6e63" },
+  { label: "Deep Indigo", value: "#3f51b5" },
+  { label: "Crimson Rose", value: "#c2185b" },
+  { label: "Sage Slate", value: "#455a64" },
+];
+
+function isDaytime(date = new Date()) {
+  const hour = date.getHours();
+  return hour >= 6 && hour < 19;
+}
+
+function getStoredAppearance() {
+  const v = localStorage.getItem("appearance") || localStorage.getItem("theme");
+  return v === "light" || v === "dark" ? v : "auto";
+}
+
+function getStoredThemeStyle() {
+  const s = localStorage.getItem("themeStyle");
+  return s === "glass" || s === "woodland" ? s : "material";
+}
+
+function getStoredFont() {
+  const f = localStorage.getItem("fontFamily");
+  return FONTS.some((item) => item.id === f) ? f : "outfit";
+}
+
+function getStoredAccent() {
+  return localStorage.getItem("accentColor") || null;
+}
+
+function applyTheme(appearance = getStoredAppearance(), style = getStoredThemeStyle()) {
+  const dark = appearance === "dark" || (appearance === "auto" && !isDaytime());
+  document.documentElement.classList.toggle("dark", dark);
+  document.documentElement.dataset.theme = style;
+  document.documentElement.dataset.font = getStoredFont();
+
+  const accent = getStoredAccent();
+  if (accent) {
+    document.documentElement.style.setProperty("--accent", accent);
+  } else {
+    document.documentElement.style.removeProperty("--accent");
+  }
+
+  updateSidebarThemeBtn();
+}
+
+function setAppearance(a) {
+  localStorage.setItem("appearance", a);
+  localStorage.removeItem("theme");
+  applyTheme(a, getStoredThemeStyle());
+}
+
+function setThemeStyle(s) {
+  localStorage.setItem("themeStyle", s);
+  applyTheme(getStoredAppearance(), s);
+}
+
+function setFont(f) {
+  localStorage.setItem("fontFamily", f);
+  applyTheme(getStoredAppearance(), getStoredThemeStyle());
+}
+
+function setAccentColor(c) {
+  if (c) {
+    localStorage.setItem("accentColor", c);
+  } else {
+    localStorage.removeItem("accentColor");
+  }
+  applyTheme(getStoredAppearance(), getStoredThemeStyle());
+}
+
+function updateSidebarThemeBtn() {
+  const btn = document.getElementById("theme-quick-btn");
+  if (!btn) return;
+  const app = getStoredAppearance();
+  const iconSpan = btn.querySelector(".ico");
+  const labelSpan = btn.querySelector(".theme-btn-label");
+  const dark = document.documentElement.classList.contains("dark");
+  if (iconSpan) {
+    iconSpan.textContent = app === "auto" ? "🌓" : (dark ? "🌙" : "☀️");
+  }
+  if (labelSpan) {
+    labelSpan.textContent = app === "auto" ? "Auto" : (dark ? "Dark" : "Light");
+  }
+}
+
+function cycleAppearance() {
+  const cur = getStoredAppearance();
+  const next = cur === "auto" ? "light" : (cur === "light" ? "dark" : "auto");
+  setAppearance(next);
+  toast(`Appearance: ${next === "auto" ? "Auto (Day/Night)" : next.charAt(0).toUpperCase() + next.slice(1)}`);
+}
+
+function initThemeWatcher() {
+  const mq = window.matchMedia("(prefers-color-scheme: dark)");
+  const check = () => {
+    if (getStoredAppearance() === "auto") applyTheme();
+  };
+  mq.addEventListener("change", check);
+  setInterval(check, 30000);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && getStoredAppearance() === "auto") {
+      applyTheme();
+    }
+  });
+}
+
+// Apply early
+applyTheme();
+initThemeWatcher();
+
 function parseHash(hash) {
   if (!hash) return { view: "household", extras: {} };
   
@@ -4188,6 +4325,143 @@ async function buildModelEvaluationPanel(container) {
   }
 }
 
+// ---------------- appearance settings builder ----------------
+function buildAppearanceSection() {
+  const content = el("div", { class: "appearance-settings-wrap" });
+
+  // 1. Theme Style (Material You, Liquid Glass, Woodland)
+  const styleWrap = el("div", { class: "setting-group" }, [
+    el("label", { class: "setting-group-title" }, "Theme Style"),
+    el("div", { class: "setting-group-sub" }, "Visual style, card surfaces, borders, and ambient gradients matching Nivas.")
+  ]);
+
+  const styleGrid = el("div", { class: "theme-style-grid" });
+  THEME_STYLES.forEach((ts) => {
+    const isCurrent = getStoredThemeStyle() === ts.id;
+    const btn = el("button", {
+      type: "button",
+      class: `theme-card-choice ${ts.id} ${isCurrent ? "active" : ""}`,
+      onclick: () => {
+        setThemeStyle(ts.id);
+        render();
+        toast(`Applied ${ts.label} theme`);
+      }
+    }, [
+      el("div", { class: "theme-card-head" }, [
+        el("span", { class: "theme-card-icon" }, ts.icon),
+        el("strong", { class: "theme-card-title" }, ts.label),
+        isCurrent ? el("span", { class: "theme-card-badge" }, "Active") : null
+      ]),
+      el("div", { class: "theme-card-desc" }, ts.desc),
+      el("div", { class: "theme-preview-palette" }, [
+        el("span", { class: "palette-dot p-bg" }),
+        el("span", { class: "palette-dot p-card" }),
+        el("span", { class: "palette-dot p-accent" }),
+      ])
+    ]);
+    styleGrid.append(btn);
+  });
+  styleWrap.append(styleGrid);
+
+  // 2. Mode / Appearance (Auto 6 AM – 7 PM, Light, Dark)
+  const modeWrap = el("div", { class: "setting-group" }, [
+    el("label", { class: "setting-group-title" }, "Appearance Mode"),
+    el("div", { class: "setting-group-sub" }, "Auto mode dynamically switches to Light mode (6 AM – 7 PM) and Dark mode (7 PM – 6 AM).")
+  ]);
+
+  const modeRow = el("div", { class: "choice-pill-row" });
+  APPEARANCES.forEach((app) => {
+    const isCurrent = getStoredAppearance() === app.id;
+    const btn = el("button", {
+      type: "button",
+      class: `choice-pill-btn ${isCurrent ? "active" : ""}`,
+      onclick: () => {
+        setAppearance(app.id);
+        render();
+        toast(`Appearance: ${app.label}`);
+      }
+    }, [
+      el("span", { class: "choice-pill-icon" }, app.icon),
+      el("span", {}, app.label)
+    ]);
+    modeRow.append(btn);
+  });
+  modeWrap.append(modeRow);
+
+  // 3. Font Family (Outfit, Roboto, Nunito, Quicksand, Inter, Arial)
+  const fontWrap = el("div", { class: "setting-group" }, [
+    el("label", { class: "setting-group-title" }, "Typography & Font"),
+    el("div", { class: "setting-group-sub" }, "Self-hosted & Google variable font options across all cards and tables.")
+  ]);
+
+  const fontGrid = el("div", { class: "font-choice-grid" });
+  FONTS.forEach((f) => {
+    const isCurrent = getStoredFont() === f.id;
+    const btn = el("button", {
+      type: "button",
+      class: `font-choice-card ${isCurrent ? "active" : ""}`,
+      style: `font-family: ${f.stack};`,
+      onclick: () => {
+        setFont(f.id);
+        render();
+        toast(`Font set to ${f.label}`);
+      }
+    }, [
+      el("div", { class: "font-choice-head" }, [
+        el("span", { class: "font-choice-name" }, f.label),
+        isCurrent ? el("span", { class: "font-choice-check" }, "✓") : null
+      ]),
+      el("div", { class: "font-choice-sample" }, "Cholesterol 185 mg/dL · In Range")
+    ]);
+    fontGrid.append(btn);
+  });
+  fontWrap.append(fontGrid);
+
+  // 4. Accent Color (Custom or Theme Default)
+  const accentWrap = el("div", { class: "setting-group" }, [
+    el("label", { class: "setting-group-title" }, "Primary Accent Tint"),
+    el("div", { class: "setting-group-sub" }, "Custom brand tint for buttons, active navigation, and chart highlights. Clinical indicators (good, warn, high) remain strictly standard.")
+  ]);
+
+  const accentRow = el("div", { class: "accent-swatch-row" });
+  const curAccent = getStoredAccent();
+
+  ACCENT_PRESETS.forEach((ac) => {
+    const isCur = (!curAccent && ac.value === null) || (curAccent && curAccent.toLowerCase() === ac.value?.toLowerCase());
+    const swatch = el("button", {
+      type: "button",
+      class: `accent-swatch ${isCur ? "active" : ""}`,
+      title: ac.label,
+      style: ac.value ? `background-color: ${ac.value};` : `background: linear-gradient(135deg, var(--accent), var(--accent-2));`,
+      onclick: () => {
+        setAccentColor(ac.value);
+        render();
+        toast(`Accent: ${ac.label}`);
+      }
+    }, [
+      isCur ? el("span", { class: "swatch-check" }, "✓") : null
+    ]);
+    accentRow.append(swatch);
+  });
+
+  const customColorInput = el("input", {
+    type: "color",
+    class: "accent-custom-color",
+    value: curAccent || "#00796b",
+    title: "Custom Accent Color",
+    onchange: (e) => {
+      setAccentColor(e.target.value);
+      render();
+      toast(`Custom accent: ${e.target.value}`);
+    }
+  });
+  accentRow.append(customColorInput);
+  accentWrap.append(accentRow);
+
+  content.append(styleWrap, modeWrap, fontWrap, accentWrap);
+  return content;
+}
+
 async function renderSettings(main) {
   main.innerHTML = "";
   document.querySelectorAll('[data-view="settings"]').forEach((b) => b.classList.add("active"));
@@ -4372,9 +4646,19 @@ async function renderSettings(main) {
   buildModelEvaluationPanel(evalContent);
   advancedContent.append(createCollapsible("Model evaluation suite", "", evalContent, false));
 
-  const advancedSection = createCollapsible("Advanced", "", advancedContent, false);
+  // ---- 3. Appearance & Themes (Nivas synced) ----------------------------
+  const appearanceContent = buildAppearanceSection();
+  const currentThemeObj = THEME_STYLES.find((t) => t.id === getStoredThemeStyle());
+  const currentAppObj = APPEARANCES.find((a) => a.id === getStoredAppearance());
+  const appearanceBadge = `${currentThemeObj ? currentThemeObj.label : "Theme"} · ${currentAppObj ? currentAppObj.label : "Mode"}`;
+  const appearanceSection = createCollapsible(
+    "Appearance & Themes",
+    appearanceBadge,
+    appearanceContent,
+    true
+  );
 
-  main.append(queueSection, aiSection, privacySection, advancedSection);
+  main.append(queueSection, aiSection, appearanceSection, privacySection, advancedSection);
 
   // ---- About ------------------------------------------------------------
   // Was buried at the bottom of the AI section, which it has nothing to do with.
@@ -4658,6 +4942,14 @@ $("#add-member").addEventListener("click", openAddMember);
 const brand = document.querySelector(".brand");
 if (brand) {
   brand.addEventListener("click", () => { navigateTo("household"); });
+}
+
+const themeQuickBtn = document.getElementById("theme-quick-btn");
+if (themeQuickBtn) {
+  themeQuickBtn.addEventListener("click", () => {
+    cycleAppearance();
+  });
+  updateSidebarThemeBtn();
 }
 
 // PWA Install Prompts
