@@ -335,26 +335,32 @@ def _get_setting(conn, key: str, default=None):
 
 
 def _ai_config(conn, override_provider=None, override_model=None):
-    provider = override_provider or _get_setting(conn, "ai_provider", "anthropic")
-    model = override_model or _get_setting(conn, f"ai_model_{provider}") or None
-    key = _get_setting(conn, f"ai_key_{provider}")
-    
-    # If key is not in DB, check environment variables
-    if not key:
-        import os
-        env_vars = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY", "gemini": "GEMINI_API_KEY"}
-        key = os.environ.get(env_vars.get(provider, ""))
-        
+    import os
+    env_gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("LITELLM_API_KEY")
+    env_openai_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("LITELLM_API_KEY")
+
+    provider = override_provider or _get_setting(conn, "ai_provider")
+    if not provider:
+        if env_gemini_key or os.environ.get("GEMINI_BASE_URL"):
+            provider = "gemini"
+        elif env_openai_key or os.environ.get("OPENAI_BASE_URL"):
+            provider = "openai"
+        else:
+            provider = "gemini"
+
+    model = override_model or _get_setting(conn, f"ai_model_{provider}") or os.environ.get(f"{provider.upper()}_MODEL") or None
+    # Environment API key takes precedence if set, otherwise DB key
+    key = os.environ.get(f"{provider.upper()}_API_KEY") or _get_setting(conn, f"ai_key_{provider}") or os.environ.get("LITELLM_API_KEY")
+
     # Auto-fallback if the chosen provider has no key but another one does
     if not key and not override_provider:
-        import os
         for p in ("gemini", "openai", "anthropic"):
             if p == provider:
                 continue
-            k = _get_setting(conn, f"ai_key_{p}") or os.environ.get(f"{p.upper()}_API_KEY")
+            k = os.environ.get(f"{p.upper()}_API_KEY") or _get_setting(conn, f"ai_key_{p}")
             if k:
                 provider = p
-                model = _get_setting(conn, f"ai_model_{p}") or None
+                model = _get_setting(conn, f"ai_model_{p}") or os.environ.get(f"{p.upper()}_MODEL") or None
                 key = k
                 break
     return provider, model, key

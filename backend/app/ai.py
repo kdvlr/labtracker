@@ -168,8 +168,18 @@ Rules: severity must be one of urgent/monitor/minor; trend and confidence fields
 DEFAULT_MODELS = {
     "anthropic": "claude-opus-4-8",
     "openai": "gpt-4o",
-    "gemini": "gemini-3.7-flash",
+    "gemini": os.environ.get("GEMINI_MODEL", "gemini-flash"),
 }
+
+
+def _get_gemini_base_url() -> str:
+    url = os.environ.get("GEMINI_BASE_URL") or os.environ.get("LITELLM_BASE_URL") or "https://generativelanguage.googleapis.com"
+    return url.rstrip("/")
+
+
+def _get_openai_base_url() -> str:
+    url = os.environ.get("OPENAI_BASE_URL") or os.environ.get("LITELLM_BASE_URL") or "https://api.openai.com/v1"
+    return url.rstrip("/")
 
 
 class AIError(Exception):
@@ -247,7 +257,7 @@ def _openai_extract(key: str, model: str, data: bytes, mime: str, system_prompt:
         ],
     }
     r = httpx.post(
-        "https://api.openai.com/v1/chat/completions",
+        f"{_get_openai_base_url()}/chat/completions",
         headers={"Authorization": f"Bearer {key}"},
         json=body,
         timeout=120,
@@ -266,7 +276,7 @@ def _openai_chat(key: str, model: str, system: str, prompt: str) -> str:
         ],
     }
     r = httpx.post(
-        "https://api.openai.com/v1/chat/completions",
+        f"{_get_openai_base_url()}/chat/completions",
         headers={"Authorization": f"Bearer {key}"},
         json=body,
         timeout=120,
@@ -283,7 +293,7 @@ def _gemini_post_with_retry(model: str, key: str, body: dict, max_retries: int =
     for attempt in range(max_retries):
         try:
             r = httpx.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                f"{_get_gemini_base_url()}/v1beta/models/{model}:generateContent",
                 headers={"x-goog-api-key": key},
                 json=body,
                 timeout=120,
@@ -341,7 +351,7 @@ def resolve(provider: str, model: Optional[str], key: Optional[str]) -> tuple:
     model = model or DEFAULT_MODELS[provider]
     if not key:
         env = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY", "gemini": "GEMINI_API_KEY"}
-        key = os.environ.get(env[provider])
+        key = os.environ.get(env.get(provider, "")) or os.environ.get("LITELLM_API_KEY")
     if not key:
         raise AIError(f"No API key configured for {provider}")
     return provider, model, key
@@ -394,7 +404,7 @@ def chat_with_usage(provider: str, model: Optional[str], key: Optional[str], sys
             ],
         }
         r = httpx.post(
-            "https://api.openai.com/v1/chat/completions",
+            f"{_get_openai_base_url()}/chat/completions",
             headers={"Authorization": f"Bearer {key}"},
             json=body,
             timeout=120,
@@ -462,7 +472,7 @@ def extract_with_usage(provider: str, model: Optional[str], key: Optional[str], 
             ],
         }
         r = httpx.post(
-            "https://api.openai.com/v1/chat/completions",
+            f"{_get_openai_base_url()}/chat/completions",
             headers={"Authorization": f"Bearer {key}"},
             json=body,
             timeout=120,
