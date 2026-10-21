@@ -321,6 +321,7 @@ def _gemini_extract(key: str, model: str, data: bytes, mime: str, system_prompt:
         "system_instruction": {"parts": [{"text": system_prompt}]},
         "contents": [
             {
+                "role": "user",
                 "parts": [
                     {"inline_data": {"mime_type": mime, "data": b64}},
                     {"text": "Extract the results as JSON."},
@@ -336,7 +337,7 @@ def _gemini_extract(key: str, model: str, data: bytes, mime: str, system_prompt:
 def _gemini_chat(key: str, model: str, system: str, prompt: str) -> str:
     body = {
         "system_instruction": {"parts": [{"text": system}]},
-        "contents": [{"parts": [{"text": prompt}]}],
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
     }
     res_json = _gemini_post_with_retry(model, key, body)
     return res_json["candidates"][0]["content"]["parts"][0]["text"]
@@ -420,7 +421,7 @@ def chat_with_usage(provider: str, model: Optional[str], key: Optional[str], sys
     else:  # gemini
         body = {
             "system_instruction": {"parts": [{"text": system}]},
-            "contents": [{"parts": [{"text": prompt}]}],
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         }
         res_json = _gemini_post_with_retry(model, key, body)
         latency = int((time.perf_counter() - start_time) * 1000)
@@ -491,6 +492,7 @@ def extract_with_usage(provider: str, model: Optional[str], key: Optional[str], 
             "system_instruction": {"parts": [{"text": sys}]},
             "contents": [
                 {
+                    "role": "user",
                     "parts": [
                         {"inline_data": {"mime_type": mime, "data": b64}},
                         {"text": "Extract the results as JSON."},
